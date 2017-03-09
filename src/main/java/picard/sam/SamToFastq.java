@@ -170,7 +170,7 @@ public class SamToFastq extends CommandLineProgram {
         factory.setCreateMd5(CREATE_MD5_FILE);
         final Map<SAMReadGroupRecord, FastqWriters> writers = generateWriters(reader.getFileHeader().getReadGroups(), factory);
         if (writers.isEmpty()) {
-            throw new PicardException(INPUT + " does not contain Read Groups");
+            throw new PicardException(INPUT + " does not contain Read Groups, consider not using the OUTPUT_PER_RG option");
         }
 
         final ProgressLogger progress = new ProgressLogger(log);
