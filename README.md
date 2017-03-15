@@ -1,3 +1,16 @@
+# A note on this fork
+This repo is intended for the development of an analytical method for determining whether sequencing read groups belong to the same library.
+Details of the method are discussed elsewhere. In brief, the method entails quantifying the similarity of pairs of read groups based on shared patterns of read duplication.
+
+The primary new classes are contained in package analysis.library. There are presently two CLPs:
+* FindReadGroupDistributions assembles sets of duplicate reads and records read group pattern information. It writes Json outputs.
+* CheckLibraryIdentity consumes these outputs, calculates similarities, and generates library identity decisions.
+
+It is ultimately our intention to merge these programs into a single tool. Both are under active development, and will require further testing and optimization.
+
+In addition to these classes, several additional filters were added. There are test classes for FindReadGroupDistributions, in the same package (many more test cases will be needed).
+
+# Original Picard documentation
 [![Coverage Status](https://coveralls.io/repos/github/broadinstitute/picard/badge.svg?branch=master)](https://coveralls.io/github/broadinstitute/picard?branch=master)
 [![Build Status](https://travis-ci.org/broadinstitute/picard.svg?branch=master)](https://travis-ci.org/broadinstitute/picard)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/broadinstitute/picard/blob/master/LICENSE.txt)

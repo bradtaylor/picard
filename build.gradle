@@ -52,6 +52,8 @@ final htsjdkVersion = System.getProperty('htsjdk.version', '2.9.0')
 dependencies {
     compile 'com.google.guava:guava:15.0'
     compile 'com.github.samtools:htsjdk:' + htsjdkVersion
+    compile 'org.apache.commons:commons-math3:3.5'
+    compile 'com.google.code.gson:gson:2.2.4'
     //tools dependency for doclet requires sdk devel
     compile(files(((URLClassLoader) ToolProvider.getSystemToolClassLoader()).getURLs()))
     testCompile 'org.testng:testng:6.9.10'
