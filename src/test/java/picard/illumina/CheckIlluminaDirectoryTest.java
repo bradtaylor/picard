@@ -8,12 +8,13 @@ import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
-import picard.cmdline.CommandLineProgramTest;
 import picard.PicardException;
+import picard.cmdline.CommandLineProgramTest;
 import picard.cmdline.StandardOptionDefinitions;
 import picard.illumina.parser.IlluminaDataType;
 import picard.illumina.parser.IlluminaFileUtil;
 import picard.illumina.parser.IlluminaFileUtilTest;
+import picard.illumina.parser.readers.AbstractIlluminaPositionFileReader;
 
 import java.io.BufferedWriter;
 import java.io.File;
@@ -23,6 +24,9 @@ import java.io.RandomAccessFile;
 import java.nio.ByteOrder;
 import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -163,7 +167,7 @@ public class CheckIlluminaDirectoryTest extends CommandLineProgramTest {
     }
 
     public static Map<Integer, List<Integer>> makeMap(final List<Integer> lanes, final List<List<Integer>> tiles) {
-        final Map<Integer, List<Integer>> map = new HashMap<Integer, List<Integer>>();
+        final Map<Integer, List<Integer>> map = new HashMap<>();
 
         if (lanes.size() != tiles.size()) {
             throw new IllegalArgumentException("Number of lanes (" + lanes + ") does not equal number of tiles!");
@@ -295,7 +299,19 @@ public class CheckIlluminaDirectoryTest extends CommandLineProgramTest {
         writeTileMetricsOutFile(makeMap(makeList(lane - 1, lane + 1, lane), makeList(makeList(1, 2, 3), tiles, tiles)));
 
         final String[] args = makeCheckerArgs(basecallDir, lane, readStructure, dataTypes, filterTiles, makeFakeFiles, false);
-        Assert.assertEquals(runPicardCommandLine(args), expectedNumErrors);
+        final int returnCode = runPicardCommandLine(args);
+        Assert.assertEquals(returnCode, 1);
+
+        try {
+            final Path errorPath = Paths.get("./errors.count");
+            final int numErrors = Integer.parseInt(new String(Files.readAllBytes(errorPath)));
+            Assert.assertEquals(numErrors, expectedNumErrors);
+            Files.deleteIfExists(errorPath);
+        }
+        catch (IOException e) {
+            Assert.fail("Could not read the number of errors from file", e);
+        }
+
         //if we previously faked files make sure CheckIlluminaDirectory returns with no failures
         if (makeFakeFiles) {
             Assert.assertEquals(runPicardCommandLine(args), 0);
@@ -336,7 +352,7 @@ public class CheckIlluminaDirectoryTest extends CommandLineProgramTest {
         writeFileOfSize(new File(cycleDir, "s_5_3.bcl"), 222);
 
         final String[] args =
-                makeCheckerArgs(basecallDir, lane, "50T", dataTypes, new ArrayList<Integer>(), false, false);
+                makeCheckerArgs(basecallDir, lane, "50T", dataTypes, new ArrayList<>(), false, false);
         Assert.assertEquals(runPicardCommandLine(args), 1);
     }
 
@@ -344,28 +360,40 @@ public class CheckIlluminaDirectoryTest extends CommandLineProgramTest {
     public void basedirDoesntExistTest() {
         final String[] args = makeCheckerArgs(new File("a_made_up_file/in_some_weird_location"), 1, "76T76T",
                 new IlluminaDataType[]{IlluminaDataType.Position},
-                new ArrayList<Integer>(), false, false);
+                new ArrayList<>(), false, false);
         runPicardCommandLine(args);
     }
 
     @Test
     public void symlinkLocsTest() {
+        symlinkTest(true);
+    }
+
+    @Test
+    public void noSymlinkLocsTest() {
+        symlinkTest(false);
+    }
+
+    public void symlinkTest(Boolean createSymlinks) {
         final List<Integer> tileList = makeList(1101, 1102, 1103, 2101, 2102, 2103);
         final int lane = 5;
         makeFiles(new SupportedIlluminaFormat[]{Bcl}, lane, tileList, IlluminaFileUtilTest.cycleRange(1, 50));
         String[] args =
-                makeCheckerArgs(basecallDir, lane, "50T", new IlluminaDataType[]{Position}, new ArrayList<Integer>(),
+                makeCheckerArgs(basecallDir, lane, "50T", new IlluminaDataType[]{Position}, new ArrayList<>(),
                         false,
-                        true);
+                        createSymlinks);
         writeTileMetricsOutFile(makeMap(makeList(lane), makeList(tileList)));
 
         createSingleLocsFile();
-        final File intensityLaneDir = new File(intensityDir, IlluminaFileUtil.longLaneStr(lane));
-        intensityLaneDir.mkdirs();
+        // if we aren't creating symlinks we shouldn't create lane dirs
+        if(createSymlinks) {
+            final File intensityLaneDir = new File(intensityDir, IlluminaFileUtil.longLaneStr(lane));
+            intensityLaneDir.mkdirs();
+        }
         Assert.assertEquals(runPicardCommandLine(args), 0);
         //now that we have created the loc files lets test to make sure they are there
         args = makeCheckerArgs(basecallDir, lane, "50T", new IlluminaDataType[]{IlluminaDataType.Position},
-                new ArrayList<Integer>(), false,
+                new ArrayList<>(), false,
                 true);
 
         Assert.assertEquals(runPicardCommandLine(args), 0);
@@ -373,13 +401,12 @@ public class CheckIlluminaDirectoryTest extends CommandLineProgramTest {
 
     private void createSingleLocsFile() {
         try {
-            final File singleLocsFile = new File(intensityDir, "s.locs");
+            final File singleLocsFile = new File(intensityDir, AbstractIlluminaPositionFileReader.S_LOCS_FILE);
             final FileWriter writer = new FileWriter(singleLocsFile);
             writer.write("This is a test string.");
             writer.close();
         } catch (final IOException e) {
             e.printStackTrace();
         }
-
     }
 }

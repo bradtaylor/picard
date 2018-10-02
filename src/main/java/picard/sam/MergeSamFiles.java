@@ -40,12 +40,13 @@ import htsjdk.samtools.util.IntervalList;
 import htsjdk.samtools.util.Log;
 import htsjdk.samtools.util.ProgressLogger;
 import htsjdk.samtools.util.SamRecordIntervalIteratorFactory;
+import org.broadinstitute.barclay.argparser.Argument;
+import org.broadinstitute.barclay.help.DocumentedFeature;
 import picard.PicardException;
 import picard.cmdline.CommandLineProgram;
-import picard.cmdline.CommandLineProgramProperties;
-import picard.cmdline.Option;
+import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
 import picard.cmdline.StandardOptionDefinitions;
-import picard.cmdline.programgroups.SamOrBam;
+import picard.cmdline.programgroups.ReadDataManipulationProgramGroup;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -54,20 +55,34 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Reads a SAM or BAM file and combines the output to one file
+ * This tool is used for combining SAM and/or BAM files from different runs or read groups into a single file, similar
+ * to the \"merge\" function of Samtools (http://www.htslib.org/doc/samtools.html).
+ * <br /><br />Note that to prevent errors in downstream processing, it is critical to identify/label read groups appropriately.
+ * If different samples contain identical read group IDs, this tool will avoid collisions by modifying the read group IDs to be
+ * unique. For more information about read groups, see the
+ * <a href='https://www.broadinstitute.org/gatk/guide/article?id=6472'>GATK Dictionary entry.</a> <br /><br />
+ * <br />
+ * <h4>Usage example:</h4>
+ * <pre>
+ * java -jar picard.jar MergeSamFiles \\<br />
+ *      I=input_1.bam \\<br />
+ *      I=input_2.bam \\<br />
+ *      O=output_merged_files.bam
+ * </pre>
+ * <hr />
  *
  * @author Tim Fennell
  */
 @CommandLineProgramProperties(
-        usage = MergeSamFiles.USAGE_SUMMARY + MergeSamFiles.USAGE_DETAILS,
-        usageShort = MergeSamFiles.USAGE_SUMMARY,
-        programGroup = SamOrBam.class
-)
+        summary = MergeSamFiles.USAGE_SUMMARY + MergeSamFiles.USAGE_DETAILS,
+        oneLineSummary = MergeSamFiles.USAGE_SUMMARY,
+        programGroup = ReadDataManipulationProgramGroup.class)
+@DocumentedFeature
 public class MergeSamFiles extends CommandLineProgram {
     private static final Log log = Log.getInstance(MergeSamFiles.class);
 
     static final String USAGE_SUMMARY = "Merges multiple SAM and/or BAM files into a single file.  ";
-    static final String USAGE_DETAILS = "This tool is used for combining SAM and/or BAM files from different runs or read groups, similarly " +
+    static final String USAGE_DETAILS = "This tool is used for combining SAM and/or BAM files from different runs or read groups into a single file, similarl " +
             "to the \"merge\" function of Samtools (http://www.htslib.org/doc/samtools.html).  " +
             "<br /><br />Note that to prevent errors in downstream processing, it is critical to identify/label read groups appropriately. " +
             "If different samples contain identical read group IDs, this tool will avoid collisions by modifying the read group IDs to be " +
@@ -79,35 +94,35 @@ public class MergeSamFiles extends CommandLineProgram {
             "java -jar picard.jar MergeSamFiles \\<br />" +
             "      I=input_1.bam \\<br />" +
             "      I=input_2.bam \\<br />" +
-            "      O=merged_files.bam" +
+            "      O=output_merged_files.bam" +
             "</pre>" +
             "<hr />"
            ;
-    @Option(shortName = "I", doc = "SAM or BAM input file", minElements = 1)
+    @Argument(shortName = "I", doc = "SAM or BAM input file", minElements = 1)
     public List<File> INPUT = new ArrayList<File>();
 
-    @Option(shortName = "O", doc = "SAM or BAM file to write merged result to")
+    @Argument(shortName = "O", doc = "SAM or BAM file to write merged result to")
     public File OUTPUT;
 
-    @Option(shortName = StandardOptionDefinitions.SORT_ORDER_SHORT_NAME, doc = "Sort order of output file", optional = true)
+    @Argument(shortName = StandardOptionDefinitions.SORT_ORDER_SHORT_NAME, doc = "Sort order of output file", optional = true)
     public SAMFileHeader.SortOrder SORT_ORDER = SAMFileHeader.SortOrder.coordinate;
 
-    @Option(doc = "If true, assume that the input files are in the same sort order as the requested output sort order, even if their headers say otherwise.",
+    @Argument(doc = "If true, assume that the input files are in the same sort order as the requested output sort order, even if their headers say otherwise.",
             shortName = StandardOptionDefinitions.ASSUME_SORTED_SHORT_NAME)
     public boolean ASSUME_SORTED = false;
 
-    @Option(shortName = "MSD", doc = "Merge the sequence dictionaries", optional = true)
+    @Argument(shortName = "MSD", doc = "Merge the sequence dictionaries", optional = true)
     public boolean MERGE_SEQUENCE_DICTIONARIES = false;
 
-    @Option(doc = "Option to create a background thread to encode, " +
+    @Argument(doc = "Option to create a background thread to encode, " +
             "compress and write to disk the output file. The threaded version uses about 20% more CPU and decreases " +
             "runtime by ~20% when writing out a compressed BAM file.")
     public boolean USE_THREADING = false;
 
-    @Option(doc = "Comment(s) to include in the merged output file's header.", optional = true, shortName = "CO")
+    @Argument(doc = "Comment(s) to include in the merged output file's header.", optional = true, shortName = "CO")
     public List<String> COMMENT = new ArrayList<String>();
 
-    @Option(shortName = "RGN", doc = "An interval list file that contains the locations of the positions to merge. "+
+    @Argument(shortName = "RGN", doc = "An interval list file that contains the locations of the positions to merge. "+
             "Assume bam are sorted and indexed. "+
             "The resulting file will contain alignments that may overlap with genomic regions outside the requested region. "+
             "Unmapped reads are discarded.",

@@ -37,12 +37,13 @@ import htsjdk.samtools.util.IOUtil;
 import htsjdk.samtools.util.Interval;
 import htsjdk.samtools.util.IntervalList;
 import htsjdk.samtools.util.SamRecordIntervalIteratorFactory;
+import org.broadinstitute.barclay.argparser.Argument;
+import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
+import org.broadinstitute.barclay.help.DocumentedFeature;
 import picard.PicardException;
 import picard.cmdline.CommandLineProgram;
-import picard.cmdline.CommandLineProgramProperties;
-import picard.cmdline.Option;
 import picard.cmdline.StandardOptionDefinitions;
-import picard.cmdline.programgroups.SamOrBam;
+import picard.cmdline.programgroups.DiagnosticsAndQCProgramGroup;
 
 import java.io.File;
 import java.io.IOException;
@@ -50,39 +51,79 @@ import java.io.PrintStream;
 import java.util.List;
 
 /**
- * Very simple command that just reads a SAM or BAM file and writes out the header
- * and each records to standard out.  When an (optional) intervals file is specified,
- * only records overlapping those intervals will be output.
+ * Prints a SAM or BAM file to the screen.
+ *
+ * <p>Very simple command that just reads a SAM or BAM file and writes out the header
+ * and each record to standard out. When an (optional) intervals file is specified,
+ * only records overlapping those intervals will be output. </p>
+ *
+ * <p>All reads, just the aligned reads, or just the unaligned reads can be printed out by
+ * setting AlignmentStatus accordingly. The SAM or BAM header can be printed out separately
+ * using HEADER_ONLY. Only the alignment records can be printed using RECORDS_ONLY.
+ * However, HEADER_ONLY and RECORDS_ONLY cannot both be specified at one time.</p>
+ *
+ * <h3>Inputs</h3>
+ * <ul>
+ *     <li> A SAM or BAM file to be viewed </li>
+ *     <li> Optional arguments specifying which reads or records need to be viewed </li>
+ * </ul>
+ *
+ * <p>
+ * <h4>Usage example: </h4>
+ * <pre>
+ *     java -jar picard.jar ViewSam \
+ *          I=input_reads.bam \
+ *          HEADER_ONLY=true
+ * </pre>
+ * <p>
+ * <br/>
  *
  * @author tfennell@broad.mit.edu
  */
 @CommandLineProgramProperties(
-        usage = "Prints a SAM or BAM file to the screen.",
-        usageShort = "Prints a SAM or BAM file to the screen",
-        programGroup = SamOrBam.class
-)
+        summary = ViewSam.USAGE_DETAILS,
+        oneLineSummary = ViewSam.USAGE_SUMMARY,
+        programGroup = DiagnosticsAndQCProgramGroup.class)
+@DocumentedFeature
 public class ViewSam extends CommandLineProgram {
+
+    static final String USAGE_SUMMARY = "Prints a SAM or BAM file to the screen";
+    static final String USAGE_DETAILS = "Very simple command that just reads a SAM or BAM file and" +
+            "writes out the header and each record to standard out. When an (optional) intervals" +
+            "file is specified, only records overlapping those intervals will be output.\n"+
+            "All reads, just the aligned reads, or just the unaligned reads can be printed out by"+
+            "setting AlignmentStatus accordingly. The SAM or BAM header can be printed out separately"+
+            "using HEADER_ONLY. Only the alignment records can be printed using RECORDS_ONLY."+
+            "However, HEADER_ONLY and RECORDS_ONLY cannot both be specified at one time."+
+            "<p>"+
+            "<h4>Usage example: </h4>" +
+            "<pre>"+
+            "java -jar picard.jar ViewSam  <br />" +
+            "      I=sample.bam  <br />" +
+            "      HEADER_ONLY=true" +
+            "</pre>";
+
     public static enum AlignmentStatus {Aligned, Unaligned, All}
 
     public static enum PfStatus {PF, NonPF, All}
 
     public final String USAGE = getStandardUsagePreamble() + "Prints a SAM or BAM file to the screen.";
-    @Option(shortName = StandardOptionDefinitions.INPUT_SHORT_NAME, doc = "The SAM or BAM file or GA4GH url to view.")
+    @Argument(shortName = StandardOptionDefinitions.INPUT_SHORT_NAME, doc = "The SAM or BAM file or GA4GH url to view.")
     public String INPUT;
 
-    @Option(doc = "Print out all reads, just the aligned reads or just the unaligned reads.")
+    @Argument(doc = "Print out all reads, just the aligned reads or just the unaligned reads.")
     public AlignmentStatus ALIGNMENT_STATUS = AlignmentStatus.All;
 
-    @Option(doc = "Print out all reads, just the PF reads or just the non-PF reads.")
+    @Argument(doc = "Print out all reads, just the PF reads or just the non-PF reads.")
     public PfStatus PF_STATUS = PfStatus.All;
 
-    @Option(doc="Print the SAM header only.", optional = true)
+    @Argument(doc="Print the SAM header only.", optional = true)
     public boolean HEADER_ONLY = false;
 
-    @Option(doc="Print the alignment records only.", optional = true)
+    @Argument(doc="Print the alignment records only.", optional = true)
     public boolean RECORDS_ONLY = false;
 
-    @Option(doc = "An intervals file used to restrict what records are output.", optional = true)
+    @Argument(doc = "An intervals file used to restrict what records are output.", optional = true)
     public File INTERVAL_LIST;
 
     public static void main(final String[] args) {

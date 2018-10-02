@@ -23,11 +23,11 @@ sequencing data such as [SAM][2] and [VCF][3].
 
 As of version 2.0.1 (Nov. 2015) Picard requires Java 1.8 (jdk8u66). The last version to support Java 1.7 was release 1.141.
 
-####Building Picard
+#### Building Picard
 
 * First, clone the repo:
 ```
-    git clone git@github.com:broadinstitute/picard.git
+    git clone https://github.com/broadinstitute/picard.git
     cd picard/
 ```
 
@@ -58,7 +58,7 @@ As of version 2.0.1 (Nov. 2015) Picard requires Java 1.8 (jdk8u66). The last ver
     ./gradlew clean
 ```
 
-####Running Tests
+#### Running Tests
 
 * To run all tests, the command is:
 ```
@@ -70,7 +70,7 @@ As of version 2.0.1 (Nov. 2015) Picard requires Java 1.8 (jdk8u66). The last ver
     ./gradlew test -Dtest.single=TestClassName 
 ```
 
-####Changing the released version of HTSJDK that Picard depends on
+#### Changing the released version of HTSJDK that Picard depends on
 
 To switch Picard's HTSJDK dependency to a different released version:
 
@@ -81,7 +81,7 @@ To switch Picard's HTSJDK dependency to a different released version:
 ```
 * Open a pull request with this change
 
-####Building Picard with a Custom Version of HTSJDK
+#### Building Picard with a Custom Version of HTSJDK
 
 During development in Picard, it is sometimes necessary to build locally against an unreleased version or branch of HTSJDK. 
 
@@ -94,11 +94,40 @@ During development in Picard, it is sometimes necessary to build locally against
     * Run `./gradlew install printVersion` in your htsjdk clone to install that version to your local maven repository. Take note of the version number that gets printed at the end.
     * Switch back to your Picard clone, and run `./gradlew shadowJar -Dhtsjdk.version=VERSION`, where VERSION is the version of HTSJDK you installed to your local maven repository.
 
-####Releasing Picard
+#### Releasing Picard
 
-Full instructions on how to create a new release of Picard are [here](https://github.com/broadinstitute/picard/wiki/How-to-release-Picard)
+Full instructions on how to create a new release of 
+Picard are [here](https://github.com/broadinstitute/picard/wiki/How-to-release-Picard)
 
-----
+#### Path providers
+
+Picard has limited support for reading from Path providers. 
+Currently only google's api is supported, and only a few tools support this.
+To run with this support you need to compile the cloudJar target with gradle:
+```bash
+./gradlew cloudJar
+
+```
+then run picard as follows:
+
+```bash
+java -jar build/lib/picardcloud.jar <Picard arguments starting from program>
+```
+For example:
+
+```bash 
+java -jar build/lib/picardcloud.jar CrosscheckFingerprints \
+   I=gs://sample1.vcf \
+   I=gs://sample2.vcf \
+   CROSSCHECK_BY=FILE \
+   H=Haplotype_db.txt \
+   O=crosscheck.out
+```
+
+Alternatively, you can run the tool via the [GATK](https://software.broadinstitute.org/gatk/download/) which bundles the Google-Cloud
+jar, and should thus "Just Work".
+
+#### GA4GH API
 
 It's also possible to build a version of Picard that supports reading from
 GA4GH API, e.g. Google Genomics:

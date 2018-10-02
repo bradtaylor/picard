@@ -25,6 +25,7 @@
 package picard.vcf;
 
 import htsjdk.samtools.metrics.MetricsFile;
+import htsjdk.samtools.metrics.StringHeader;
 import htsjdk.samtools.util.BufferedLineReader;
 import htsjdk.samtools.util.IOUtil;
 import htsjdk.variant.variantcontext.Allele;
@@ -69,6 +70,10 @@ public class GenotypeConcordanceTest {
     // Test that we notice a deleted line
     private static final File CEU_TRIOS_SNPS_DEL_LINE_VCF = new File(TEST_DATA_PATH, "CEUTrio-snps_del_line.vcf");
 
+    //Test vcf output with spanning deletion
+    private static final Path SPANNING_DELETION_TRUTH = TEST_DATA_PATH.toPath().resolve("spanningDeletionTruth.vcf");
+    private static final Path SPANNING_DELETION_CALLSET = TEST_DATA_PATH.toPath().resolve("spanningDeletionCallset.vcf");
+
     // Existing/expected base metrics file names
     private static final String CEU_TRIOS_SNPS_VS_CEU_TRIOS_SNPS_GC = "CEUTrio-snps_vs_CEUTrio-snps_GtConcordanceDiff";
     private static final String CEU_TRIOS_INDELS_VS_CEU_TRIOS_INDELS_GC = "CEUTrio-indels_vs_CEUTrio-indels_GtConcordanceDiff";
@@ -79,6 +84,7 @@ public class GenotypeConcordanceTest {
     private static final String CEU_TRIOS_SNPS_VS_CEU_TRIOS_SNPS_GC_MIN_GQ = "CEUTrio-snps_vs_CEUTrio-snps_GtConcordanceDiff_MinGq";
     private static final String CEU_TRIOS_SNPS_VS_CEU_TRIOS_SNPS_GC_MIN_DP = "CEUTrio-snps_vs_CEUTrio-snps_GtConcordanceDiff_MinDp";
     private static final String NIST_TRUTH_SNPS_VS_CEU_TRIOS_SNPS_GC = "NIST-truth-snps_vs_CEUTrio-snps_GtConcordanceDiff";
+    private static final String SPANNING_DELETION_CALLSET_VS_SPANNING_DELETION_TRUTH = "spanningDeletionCallset_vs_spanningDeletionTruth";
 
     private static final String TRUTH_SAMPLE_NAME = "Foo";
     private static final String CALL_SAMPLE_NAME = "Foo";
@@ -100,6 +106,8 @@ public class GenotypeConcordanceTest {
 
     private static final String NORMALIZE_ALLELES_TRUTH = "normalize_alleles_truth.vcf";
     private static final String NORMALIZE_ALLELES_CALL = "normalize_alleles_call.vcf";
+    private static final String NORMALIZE_NO_CALLS_TRUTH = "normalize_no_calls_truth.vcf";
+    private static final String NORMALIZE_NO_CALLS_CALL = "normalize_no_calls_call.vcf";
 
     @AfterClass
     public void tearDown() {
@@ -117,7 +125,8 @@ public class GenotypeConcordanceTest {
                 {CEU_TRIOS_SNPS_VCF, "NA12878", CEU_TRIOS_SNPS_VCF, "NA12878", null, null, true, false, CEU_TRIOS_SNPS_VS_CEU_TRIOS_SNPS_GC_ALL_ROWS},
                 {CEU_TRIOS_SNPS_VCF, "NA12878", CEU_TRIOS_SNPS_VCF, "NA12891", 40, null, false, false, CEU_TRIOS_SNPS_VS_CEU_TRIOS_SNPS_GC_MIN_GQ},
                 {CEU_TRIOS_SNPS_VCF, "NA12878", CEU_TRIOS_SNPS_VCF, "NA12891", null, 40, false, false, CEU_TRIOS_SNPS_VS_CEU_TRIOS_SNPS_GC_MIN_DP},
-                {NIST_MISSING_SITES_TRUTH_VCF, "NA12878", CEU_TRIOS_SNPS_VCF, "NA12878", null, null, false, true, NIST_TRUTH_SNPS_VS_CEU_TRIOS_SNPS_GC}
+                {NIST_MISSING_SITES_TRUTH_VCF, "NA12878", CEU_TRIOS_SNPS_VCF, "NA12878", null, null, false, true, NIST_TRUTH_SNPS_VS_CEU_TRIOS_SNPS_GC},
+                {SPANNING_DELETION_TRUTH.toFile(), "/dev/stdin", SPANNING_DELETION_CALLSET.toFile(), "CHMI_CHMI3_WGS2", null, null, false, false, SPANNING_DELETION_CALLSET_VS_SPANNING_DELETION_TRUTH}
         };
     }
 
@@ -503,7 +512,7 @@ public class GenotypeConcordanceTest {
                                                        final VariantContext callVariantContext, final CallState expectedCallState,
                                                        final int minGq, final int minDp) {
         final TruthAndCallStates truthAndCallStates = GenotypeConcordance.determineState(truthVariantContext, TRUTH_SAMPLE_NAME,
-                callVariantContext, CALL_SAMPLE_NAME, minGq, minDp);
+                callVariantContext, CALL_SAMPLE_NAME, minGq, minDp, false);
         Assert.assertEquals(truthAndCallStates.truthState, expectedTruthState);
         Assert.assertEquals(truthAndCallStates.callState, expectedCallState);
     }
@@ -545,12 +554,12 @@ public class GenotypeConcordanceTest {
             final VariantContext callCtx  = callIterator.next();
 
             {
-                final GenotypeConcordance.Alleles alleles = GenotypeConcordance.normalizeAlleles(truthCtx, truthSample, callCtx, callSample);
+                final GenotypeConcordance.Alleles alleles = GenotypeConcordance.normalizeAlleles(truthCtx, truthSample, callCtx, callSample, false);
                 Assert.assertEquals(alleles.truthAllele1, alleles.callAllele1);
                 Assert.assertEquals(alleles.truthAllele2, alleles.callAllele2);
             }
             {
-                final GenotypeConcordance.Alleles alleles = GenotypeConcordance.normalizeAlleles(callCtx, callSample, truthCtx, truthSample);
+                final GenotypeConcordance.Alleles alleles = GenotypeConcordance.normalizeAlleles(callCtx, callSample, truthCtx, truthSample, false);
                 Assert.assertEquals(alleles.truthAllele1, alleles.callAllele1);
                 Assert.assertEquals(alleles.truthAllele2, alleles.callAllele2);
             }
@@ -558,5 +567,143 @@ public class GenotypeConcordanceTest {
 
         truthReader.close();
         callReader.close();
+    }
+
+    @Test
+    public void testNoCallVariants() {
+        final GenotypeConcordance genotypeConcordance = new GenotypeConcordance();
+        genotypeConcordance.TRUTH_VCF = new File(TEST_DATA_PATH, "mini.vcf");
+        genotypeConcordance.TRUTH_SAMPLE = "NA20801";
+        genotypeConcordance.CALL_VCF = new File(TEST_DATA_PATH, "mini.vcf");
+        genotypeConcordance.CALL_SAMPLE = "NA19920";
+        genotypeConcordance.OUTPUT = new File(OUTPUT_DATA_PATH, "TwoNoCalls");
+        genotypeConcordance.OUTPUT_VCF = true;
+
+        Assert.assertEquals(genotypeConcordance.instanceMain(new String[0]), 0);
+    }
+
+    @Test
+    public void testNormalizeAllelesForWritingVCF() throws FileNotFoundException {
+        final File truthVcfPath             = new File(TEST_DATA_PATH.getAbsolutePath(), NORMALIZE_NO_CALLS_TRUTH);
+        final File callVcfPath              = new File(TEST_DATA_PATH.getAbsolutePath(), NORMALIZE_NO_CALLS_CALL);
+        final File outputBaseFileName       = new File(OUTPUT_DATA_PATH, "MultipleRefAlleles");
+        final File outputContingencyMetrics = new File(outputBaseFileName.getAbsolutePath() + GenotypeConcordance.CONTINGENCY_METRICS_FILE_EXTENSION);
+        outputContingencyMetrics.deleteOnExit();
+
+        final GenotypeConcordance genotypeConcordance = new GenotypeConcordance();
+        genotypeConcordance.TRUTH_VCF = truthVcfPath;
+        genotypeConcordance.TRUTH_SAMPLE = "truth";
+        genotypeConcordance.CALL_VCF = callVcfPath;
+        genotypeConcordance.CALL_SAMPLE = "truth";
+        genotypeConcordance.OUTPUT = new File(OUTPUT_DATA_PATH, "MultipleRefAlleles");
+        genotypeConcordance.OUTPUT_VCF = true;
+
+        Assert.assertEquals(genotypeConcordance.instanceMain(new String[0]), 0);
+
+        final MetricsFile<GenotypeConcordanceContingencyMetrics, Comparable<?>> output = new MetricsFile<GenotypeConcordanceContingencyMetrics, Comparable<?>>();
+        output.read(new FileReader(outputContingencyMetrics));
+
+        for (final GenotypeConcordanceContingencyMetrics metrics : output.getMetrics()) {
+            if(metrics.VARIANT_TYPE == VariantContext.Type.INDEL){
+                Assert.assertEquals(metrics.TP_COUNT, 3);
+                Assert.assertEquals(metrics.TN_COUNT, 3);
+                Assert.assertEquals(metrics.FP_COUNT, 0);
+                Assert.assertEquals(metrics.FN_COUNT, 0);
+                Assert.assertEquals(metrics.EMPTY_COUNT, 2);
+            }
+        }
+    }
+
+    
+    /**
+     * Tests that we ignore a spanning deletion (*) instead of throwing an exception.
+     */
+    @Test
+    public void testSpanningDeletion() throws FileNotFoundException {
+        final File truthVcfPath             = new File(TEST_DATA_PATH.getAbsolutePath(), "spanningDeletionTruth.vcf");
+        final File callVcfPath              = new File(TEST_DATA_PATH.getAbsolutePath(), "spanningDeletionCallset.vcf");
+        final File outputBaseFileName       = new File(OUTPUT_DATA_PATH, "spanningDeletion");
+        final File outputContingencyMetrics = new File(outputBaseFileName.getAbsolutePath() + GenotypeConcordance.CONTINGENCY_METRICS_FILE_EXTENSION);
+        outputContingencyMetrics.deleteOnExit();
+
+        final GenotypeConcordance genotypeConcordance = new GenotypeConcordance();
+        genotypeConcordance.TRUTH_VCF = truthVcfPath;
+        genotypeConcordance.TRUTH_SAMPLE = "/dev/stdin";
+        genotypeConcordance.CALL_VCF = callVcfPath;
+        genotypeConcordance.CALL_SAMPLE = "CHMI_CHMI3_WGS2";
+        genotypeConcordance.OUTPUT = new File(OUTPUT_DATA_PATH, "spanningDeletion");
+        genotypeConcordance.OUTPUT_VCF = true;
+
+        Assert.assertEquals(genotypeConcordance.instanceMain(new String[0]), 0);
+
+        final MetricsFile<GenotypeConcordanceContingencyMetrics, Comparable<?>> output = new MetricsFile<GenotypeConcordanceContingencyMetrics, Comparable<?>>();
+        output.read(new FileReader(outputContingencyMetrics));
+
+        for (final GenotypeConcordanceContingencyMetrics metrics : output.getMetrics()) {
+            if (metrics.VARIANT_TYPE == VariantContext.Type.SNP) {
+                Assert.assertEquals(metrics.TP_COUNT, 1);
+                Assert.assertEquals(metrics.TN_COUNT,0);
+                Assert.assertEquals(metrics.FP_COUNT, 0);
+                Assert.assertEquals(metrics.FN_COUNT, 0);
+                Assert.assertEquals(metrics.EMPTY_COUNT, 0);
+            }
+        }
+    }
+
+    @Test
+    public void testIgnoreFilterStatus() throws Exception {
+        final File truthVcfPath = new File(TEST_DATA_PATH.getAbsolutePath(), "NIST_subset_3sites.vcf");
+        final File callVcfPath = new File(TEST_DATA_PATH.getAbsolutePath(), "vcf_with_filtered_calls.vcf");
+        final File ignoreFilterStatusOutputBaseFileName = new File(OUTPUT_DATA_PATH, "ignoreFilterStatus");
+        final File doIgnoreMetrics = new File(ignoreFilterStatusOutputBaseFileName.getAbsolutePath() + GenotypeConcordance.CONTINGENCY_METRICS_FILE_EXTENSION);
+        doIgnoreMetrics.deleteOnExit();
+        final File dontIgnoreFilterStatusOutputBaseFileName = new File(OUTPUT_DATA_PATH, "dontIgnoreFilterStatus");
+        final File dontIgnoreMetrics = new File(dontIgnoreFilterStatusOutputBaseFileName.getAbsolutePath() + GenotypeConcordance.CONTINGENCY_METRICS_FILE_EXTENSION);
+        dontIgnoreMetrics.deleteOnExit();
+
+        final GenotypeConcordance dontIgnore = new GenotypeConcordance();
+        dontIgnore.TRUTH_VCF = truthVcfPath;
+        dontIgnore.TRUTH_SAMPLE = "NA12878";
+        dontIgnore.CALL_VCF = callVcfPath;
+        dontIgnore.CALL_SAMPLE = "NA12878";
+        dontIgnore.OUTPUT = new File(OUTPUT_DATA_PATH, "dontIgnoreFilterStatus");
+        dontIgnore.OUTPUT_VCF = false;
+
+        final GenotypeConcordance doIgnore = new GenotypeConcordance();
+        doIgnore.TRUTH_VCF = truthVcfPath;
+        doIgnore.TRUTH_SAMPLE = "NA12878";
+        doIgnore.CALL_VCF = callVcfPath;
+        doIgnore.CALL_SAMPLE = "NA12878";
+        doIgnore.OUTPUT = new File(OUTPUT_DATA_PATH, "ignoreFilterStatus");
+        dontIgnore.OUTPUT_VCF = false;
+        doIgnore.IGNORE_FILTER_STATUS = true;
+
+        Assert.assertEquals(dontIgnore.instanceMain(new String[0]), 0);
+        Assert.assertEquals(doIgnore.instanceMain(new String[0]), 0);
+
+        final MetricsFile<GenotypeConcordanceContingencyMetrics, Comparable<?>> dontIgnoreOut = new MetricsFile<GenotypeConcordanceContingencyMetrics, Comparable<?>>();
+        dontIgnoreOut.read(new FileReader(dontIgnoreMetrics));
+
+        for (final GenotypeConcordanceContingencyMetrics metrics : dontIgnoreOut.getMetrics()) {
+            if (metrics.VARIANT_TYPE == VariantContext.Type.SNP) {
+                Assert.assertEquals(metrics.TP_COUNT, 1);
+                Assert.assertEquals(metrics.TN_COUNT, 3);
+                Assert.assertEquals(metrics.FP_COUNT, 1);
+                Assert.assertEquals(metrics.FN_COUNT, 2);
+                Assert.assertEquals(metrics.EMPTY_COUNT, 0);
+            }
+        }
+
+        final MetricsFile<GenotypeConcordanceContingencyMetrics, Comparable<?>> doIgnoreOut = new MetricsFile<GenotypeConcordanceContingencyMetrics, Comparable<?>>();
+        doIgnoreOut.read(new FileReader(doIgnoreMetrics));
+        for (final GenotypeConcordanceContingencyMetrics metrics : doIgnoreOut.getMetrics()) {
+            if (metrics.VARIANT_TYPE == VariantContext.Type.SNP) {
+                Assert.assertEquals(metrics.TP_COUNT, 3);
+                Assert.assertEquals(metrics.TN_COUNT, 3);
+                Assert.assertEquals(metrics.FP_COUNT, 1);
+                Assert.assertEquals(metrics.FN_COUNT, 0);
+                Assert.assertEquals(metrics.EMPTY_COUNT, 0);
+            }
+        }
     }
 }

@@ -109,7 +109,8 @@ public class CallingMetricAccumulator implements VariantProcessor.Accumulator<Ca
     }
 
     public void setup(final VCFHeader vcfHeader) {
-        //noop.
+        //Use sampleMetricsMap.get in case a sample isn't ever put in the map (due to being all HomRef for example)
+        vcfHeader.getGenotypeSamples().stream().forEach(sampleName -> sampleMetricsMap.get(sampleName));
     }
 
     /** Incorporates the provided variant's data into the metric analysis. */
@@ -179,6 +180,9 @@ public class CallingMetricAccumulator implements VariantProcessor.Accumulator<Ca
         updateSummaryMetric(metric, genotype, vc, hasSingletonSample);
 
         if (genotype != null && !vc.isFiltered()) {
+            if (genotype.getGQ() == 0) {
+                ++metric.TOTAL_GQ0_VARIANTS;
+            }
             if (genotype.isHet()) {
                 ++metric.numHets;
             } else if (genotype.isHomVar()) {

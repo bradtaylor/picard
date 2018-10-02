@@ -32,12 +32,13 @@ import htsjdk.variant.variantcontext.writer.Options;
 import htsjdk.variant.variantcontext.writer.VariantContextWriter;
 import htsjdk.variant.variantcontext.writer.VariantContextWriterBuilder;
 import htsjdk.variant.vcf.*;
+import org.broadinstitute.barclay.argparser.Argument;
+import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
+import org.broadinstitute.barclay.help.DocumentedFeature;
 import picard.PicardException;
 import picard.cmdline.CommandLineProgram;
-import picard.cmdline.CommandLineProgramProperties;
-import picard.cmdline.Option;
 import picard.cmdline.StandardOptionDefinitions;
-import picard.cmdline.programgroups.VcfOrBcf;
+import picard.cmdline.programgroups.VariantEvaluationProgramGroup;
 import picard.vcf.GenotypeConcordanceStates.CallState;
 import picard.vcf.GenotypeConcordanceStates.ContingencyState;
 import picard.vcf.GenotypeConcordanceStates.TruthAndCallStates;
@@ -52,110 +53,172 @@ import static htsjdk.variant.vcf.VCFConstants.MISSING_VALUE_v4;
 import static picard.vcf.GenotypeConcordanceStateCodes.*;
 
 /**
- * Calculates the concordance between genotype data for two samples in two different VCFs - one being considered the truth (or reference)
- * the other being the call.  The concordance is broken into separate results sections for SNPs and indels.  Summary and detailed statistics
- * are reported
+ * <h3>Summary</h3>
+ * Calculates the concordance between genotype data of one sample in each of two VCFs - one being considered the truth (or reference)
+ * the other being the call.  The concordance is broken into separate results sections for SNPs and indels.  Satistics
+ * are reported in three different files.
+ *
+ * <h3>Details</h3>
+ * This tool evaluates the concordance between genotype calls for a sample in different callsets where one is being considered
+ * as the \"truth\" (aka standard, or reference) and the other as the \"call\" that is being evaluated for accuracy. The
+ * Comparison can be restricted to a confidence interval which is typically used in order to enable proper assessment of
+ * False Positives and the False-Positive Rate (FPR).
+ * <br />
+ * <h3>Usage example</h3>
+ * <h4>Compare two VCFs within a confidence region</h4>
+ * <pre>
+ * java -jar picard.jar GenotypeConcordance \\
+ *       CALL_VCF=input.vcf \\
+ *       CALL_SAMPLE=sample_name \\
+ *       O=gc_concordance.vcf \\
+ *       TRUTH_VCF=truth_set.vcf \\
+ *       TRUTH_SAMPLE=sample_in_truth \\
+ *       INTERVALS=confident.interval_list \\
+ *       MISSING_SITES_HOM_REF = true
+ * </pre>
+ *
+ * <h3>Output Metrics:</h3>
+ * Output metrics consists of GenotypeConcordanceContingencyMetrics, GenotypeConcordanceSummaryMetrics, and
+ * GenotypeConcordanceDetailMetrics.  For each set of metrics, the data is broken into separate sections for
+ * SNPs and INDELs.  Note that only SNP and INDEL variants are considered, MNP, Symbolic, and Mixed classes
+ *  of variants are not included.
+ * <ul>
+ * <li>{@link GenotypeConcordanceContingencyMetrics} enumerate the constituents of each contingent in a callset including true-positive
+ * (TP), true-negative (TN), false-positive (FP), and false-negative (FN) calls.</li>
+ * <li>{@link GenotypeConcordanceDetailMetrics} include the numbers of SNPs and INDELs for each contingent genotype as well as the
+ * number of validated genotypes.</li>
+ * <li>{@link GenotypeConcordanceSummaryMetrics} provide specific details for the variant caller performance on a callset including
+ * values for sensitivity, specificity, and positive predictive values.</li>
+ * </ul>
+ * <br />
+ * <br />
+ * Useful definitions applicable to alleles and genotypes:
+ * <ul>
+ * <li>Truthset - A callset (typically in VCF format) containing variant calls and genotypes that have been cross-validated
+ * with multiple technologies e.g. Genome In A Bottle Consortium (GIAB) (https://sites.stanford.edu/abms/giab)</li>
+ * <li>TP - True-positives are variant sites that match against the truth-set</li>
+ * <li>FP - False-positives are reference sites miscalled as variant</li>
+ * <li>FN - False-negatives are variant sites miscalled as reference</li>
+ * <li>TN - True-negatives are correctly called as reference</li>
+ * <li>Validated genotypes - are TP sites where the exact genotype (HET or HOM-VAR) appears in the truth-set</li>
+ * </ul>
+ * <h3>VCF Output:</h3>
+ * <ul>
+ * <li>The concordance state will be stored in the CONC_ST tag in the INFO field</li>
+ * <li>The truth sample name will be \"truth\" and call sample name will be \"call\"</li>
+ * </ul>
+ *
  *
  * @author Tim Fennell
  * @author George Grant
  */
 @CommandLineProgramProperties(
-        usage = GenotypeConcordance.USAGE_SUMMARY + GenotypeConcordance.USAGE_DETAILS,
-        usageShort =  GenotypeConcordance.USAGE_SUMMARY,
-        programGroup = VcfOrBcf.class
-)
+        summary = GenotypeConcordance.USAGE_SUMMARY + GenotypeConcordance.USAGE_DETAILS,
+        oneLineSummary =  GenotypeConcordance.USAGE_SUMMARY,
+        programGroup = VariantEvaluationProgramGroup.class)
+@DocumentedFeature
 public class GenotypeConcordance extends CommandLineProgram {
-    static final String USAGE_SUMMARY = "Evaluate genotype concordance between callsets.";
-    static final String USAGE_DETAILS = "This tool evaluates the concordance between genotype calls for samples in different " +
-            "callsets where one is being considered as the truth (aka standard, or reference) and the other as the call that is being " +
-            "evaluated for accuracy. <br />" +
-            "<h4>Usage example:</h4>" +
-            "<pre>" +
-            "java -jar picard.jar GenotypeConcordance \\<br />" +
-            "      CALL_VCF=input.vcf \\<br />" +
-            "      CALL_SAMPLE=sample_name \\<br />" +
-            "      O=gc_concordance.vcf \\<br />" +
-            "      TRUTH_VCF=truth_set.vcf \\<br />" +
-            "      TRUTH_SAMPLE=truth_sample#" +
-            "</pre>" +
-            "" +
-            "<h4>Output Metrics:</h4>" +
-            "<ul>" +
-            "<li>Output metrics include GenotypeConcordanceContingencyMetrics, GenotypeConcordanceSummaryMetrics, and " +
-            "GenotypeConcordanceDetailMetrics.  For each set of metrics, the data is broken into separate sections for " +
-            "SNPs and INDELs.  Note that only SNP and INDEL variants are considered, MNP, Symbolic, and Mixed classes" +
-            " of variants are not included. </li>" +
-            "<li>GenotypeConcordanceContingencyMetrics enumerate the constituents of each contingent in a callset " +
-            "including true-positive (TP), true-negative (TN), false-positive (FP), and false-negative (FN) calls. See " +
-            "http://broadinstitute.github.io/picard/picard-metric-definitions.html#GenotypeConcordanceContingencyMetrics" +
-            " for more details.</li>" +
-            "<li>GenotypeConcordanceDetailMetrics include the numbers of SNPs and INDELs for each contingent genotype as well " +
-            "as the number of validated genotypes. See " +
-            "http://broadinstitute.github.io/picard/picard-metric-definitions.html#GenotypeConcordanceDetailMetrics for more details.</li>" +
-            "<li>GenotypeConcordanceSummaryMetrics provide specific details for the variant caller performance on a callset including: " +
-            "values for sensitivity, specificity, and positive predictive values. See " +
-            "http://broadinstitute.github.io/picard/picard-metric-definitions.html#GenotypeConcordanceSummaryMetrics for more details.</li>" +
-            "</ul>" +
-            "<br /><br />" +
-            "Useful definitions applicable to alleles and genotypes:<br /> " +
-            "<ul>"+
-            "<li>Truthset - A callset (typically in VCF format) containing variant calls and genotypes that have been cross-validated " +
-            "with multiple technologies e.g. Genome In A Bottle Consortium (GIAB) (https://sites.stanford.edu/abms/giab)</li>" +
-            "<li>TP - True positives are variant calls that match a 'truthset'</li>" +
-            "<li>FP - False-positives are reference sites miscalled as variant</li>" +
-            "<li>FN - False-negatives are variant sites miscalled as reference</li>" +
-            "<li>TN - True negatives are correctly called reference sites</li>" +
-            "<li>Validated genotypes - are TP sites where the exact genotype (HET or HOM-VAR) has been validated </li> "     +
-            "</ul>"+
-            "" +
-            "<h4>VCF Output:</h4>" +
-            "<ul>" +
-            "<li>The concordance state will be stored in the \"CONC_ST\" tag in the INFO field.</li>" +
-            "<li>The truth sample name will be \"truth\" and call sample name will be \"call\".</li>" +
-            "</ul>" +
-            "<hr />"
+    static final String USAGE_SUMMARY = "Calculates the concordance between genotype data of one samples in each of two VCFs - one " +
+            " being considered the truth (or reference) the other being the call.  The concordance is broken into separate " +
+            "results sections for SNPs and indels.  Statistics are reported in three different files.";
             ;
-    @Option(shortName = "TV", doc="The VCF containing the truth sample")
+    static final String USAGE_DETAILS =
+            "<h3>Summary</h3>" +
+            "Calculates the concordance between genotype data of one samples in each of two VCFs - one being considered the truth (or reference) " +
+            "the other being the call.  The concordance is broken into separate results sections for SNPs and indels.  Summary and detailed statistics " +
+            "are reported.\n" +
+            "\n" +
+            "<h3>Details</h3>\n" +
+            "This tool evaluates the concordance between genotype calls for a sample in different callsets where one is being considered " +
+            "as the \"truth\" (aka standard, or reference) and the other as the \"call\" that is being evaluated for accuracy. The " +
+            "Comparison can be restricted to a confidence interval which is typically used in order to enable proper assessment of " +
+            "False Positives and the False-Positive Rate (FPR).\n" +
+            "\n" +
+            "<h3>Usage example</h3>\n" +
+            "<h4>Compare two VCFs within a confidence region</h4>\n" +
+            "\n" +
+            "java -jar picard.jar GenotypeConcordance \\\n" +
+            "      CALL_VCF=input.vcf \\\n" +
+            "      CALL_SAMPLE=sample_name \\\n" +
+            "      O=gc_concordance.vcf \\\n" +
+            "      TRUTH_VCF=truth_set.vcf \\\n" +
+            "      TRUTH_SAMPLE=sample_in_truth \\\n" +
+            "      INTERVALS=confident.interval_list \\\n" +
+            "      MISSING_SITES_HOM_REF = true\n" +
+            "\n" +
+            "<h3>Output Metrics:</h3>\n" +
+            "Output metrics consists of GenotypeConcordanceContingencyMetrics, GenotypeConcordanceSummaryMetrics, and " +
+            "GenotypeConcordanceDetailMetrics.  For each set of metrics, the data is broken into separate sections for " +
+            "SNPs and INDELs.  Note that only SNP and INDEL variants are considered, MNP, Symbolic, and Mixed classes " +
+            " of variants are not included.\n" +
+            "\n" +
+            "- GenotypeConcordanceContingencyMetrics enumerate the constituents of each contingent in a callset including true-positive" +
+            "(TP), true-negative (TN), false-positive (FP), and false-negative (FN) calls. See" +
+            "http://broadinstitute.github.io/picard/picard-metric-definitions.html#GenotypeConcordanceContingencyMetrics for more details.\n" +
+            "- GenotypeConcordanceDetailMetrics include the numbers of SNPs and INDELs for each contingent genotype as well as the" +
+            "number of validated genotypes. See" +
+            "http://broadinstitute.github.io/picard/picard-metric-definitions.html#GenotypeConcordanceDetailMetrics for more details." +
+            "- GenotypeConcordanceSummaryMetrics provide specific details for the variant caller performance on a callset including:" +
+            "values for sensitivity, specificity, and positive predictive values. See" +
+            "http://broadinstitute.github.io/picard/picard-metric-definitions.html#GenotypeConcordanceSummaryMetrics for more details.\n" +
+            "\n" +
+            "Useful definitions applicable to alleles and genotypes:\n" +
+            "\n" +
+            "Truthset - A callset (typically in VCF format) containing variant calls and genotypes that have been cross-validated" +
+            "with multiple technologies e.g. Genome In A Bottle Consortium (GIAB) (https://sites.stanford.edu/abms/giab)\n" +
+            "TP - True-positives are variant sites that match against the truth-set\n" +
+            "FP - False-positives are reference sites miscalled as variant\n" +
+            "FN - False-negatives are variant sites miscalled as reference\n" +
+            "TN - True-negatives are correctly called as reference\n" +
+            "Validated genotypes - are TP sites where the exact genotype (HET or HOM-VAR) appears in the truth-set\n" +
+            "\n" +
+            "<h3>VCF Output:</h3>\n" +
+            "- The concordance state will be stored in the CONC_ST tag in the INFO field\n" +
+            "- The truth sample name will be \"truth\" and call sample name will be \"call\"";
+    @Argument(shortName = "TV", doc="The VCF containing the truth sample")
     public File TRUTH_VCF;
 
-    @Option(shortName = "CV", doc="The VCF containing the call sample")
+    @Argument(shortName = "CV", doc="The VCF containing the call sample")
     public File CALL_VCF;
 
-    @Option(shortName = StandardOptionDefinitions.OUTPUT_SHORT_NAME, doc = "Basename for the two metrics files that are to be written." +
-            " Resulting files will be <OUTPUT>" + SUMMARY_METRICS_FILE_EXTENSION + " and <OUTPUT>" + DETAILED_METRICS_FILE_EXTENSION + ".")
+    @Argument(shortName = StandardOptionDefinitions.OUTPUT_SHORT_NAME, doc = "Basename for the three metrics files that are to be written." +
+            " Resulting files will be <OUTPUT>" + SUMMARY_METRICS_FILE_EXTENSION + ", <OUTPUT>" + DETAILED_METRICS_FILE_EXTENSION + ", and <OUTPUT>" + CONTINGENCY_METRICS_FILE_EXTENSION + ".")
     public File OUTPUT;
 
-    @Option(doc = "Output a VCF annotated with concordance information.")
+    @Argument(doc = "Output a VCF annotated with concordance information.")
     public boolean OUTPUT_VCF = false;
 
-    @Option(shortName = "TS", doc="The name of the truth sample within the truth VCF. Not required if only one sample exists.", optional = true)
+    @Argument(shortName = "TS", doc="The name of the truth sample within the truth VCF. Not required if only one sample exists.", optional = true)
     public String TRUTH_SAMPLE = null;
 
-    @Option(shortName = "CS", doc="The name of the call sample within the call VCF. Not required if only one sample exists.", optional = true)
+    @Argument(shortName = "CS", doc="The name of the call sample within the call VCF. Not required if only one sample exists.", optional = true)
     public String CALL_SAMPLE = null;
 
-    @Option(doc="One or more interval list files that will be used to limit the genotype concordance.  Note - if intervals are specified, the VCF files must be indexed.")
+    @Argument(doc="One or more interval list files that will be used to limit the genotype concordance.  Note - if intervals are specified, the VCF files must be indexed.", optional = true)
     public List<File> INTERVALS;
 
-    @Option(doc="If true, multiple interval lists will be intersected. If false multiple lists will be unioned.")
+    @Argument(doc="If true, multiple interval lists will be intersected. If false multiple lists will be unioned.")
     public boolean INTERSECT_INTERVALS = true;
 
-    @Option(doc="Genotypes below this genotype quality will have genotypes classified as LowGq.")
+    @Argument(doc="Genotypes below this genotype quality will have genotypes classified as LowGq.")
     public int MIN_GQ = 0;
 
-    @Option(doc="Genotypes below this depth will have genotypes classified as LowDp.")
+    @Argument(doc="Genotypes below this depth will have genotypes classified as LowDp.")
     public int MIN_DP = 0;
 
-    @Option(doc="If true, output all rows in detailed statistics even when count == 0.  When false only output rows with non-zero counts.")
+    @Argument(doc="If true, output all rows in detailed statistics even when count == 0.  When false only output rows with non-zero counts.")
     public boolean OUTPUT_ALL_ROWS = false;
 
-    @Option(doc="If true, use the VCF index, else iterate over the entire VCF.", optional = true)
+    @Argument(doc="If true, use the VCF index, else iterate over the entire VCF.", optional = true)
     public boolean USE_VCF_INDEX = false;
 
-    @Option(shortName = "MISSING_HOM", doc="Default is false, which follows the GA4GH Scheme. If true, missing sites in the truth set will be " +
+    @Argument(shortName = "MISSING_HOM", doc="Default is false, which follows the GA4GH Scheme. If true, missing sites in the truth set will be " +
             "treated as HOM_REF sites and sites missing in both the truth and call sets will be true negatives. Useful when hom ref sites are left out of the truth set. " +
             "This flag can only be used with a high confidence interval list.")
     public boolean MISSING_SITES_HOM_REF = false;
+
+    @Argument(doc="Default is false. If true, filter status of sites will be ignored so that we include filtered sites when calculating genotype concordance. ", optional = true)
+    public boolean IGNORE_FILTER_STATUS = false;
 
     private final Log log = Log.getInstance(GenotypeConcordance.class);
     private final ProgressLogger progress = new ProgressLogger(log, 10000, "checked", "variants");
@@ -163,7 +226,7 @@ public class GenotypeConcordance extends CommandLineProgram {
     public static final String SUMMARY_METRICS_FILE_EXTENSION     = ".genotype_concordance_summary_metrics";
     public static final String DETAILED_METRICS_FILE_EXTENSION    = ".genotype_concordance_detail_metrics";
     public static final String CONTINGENCY_METRICS_FILE_EXTENSION = ".genotype_concordance_contingency_metrics";
-    public static final String OUTPUT_VCF_FILE_EXTENSION          = ".genotype_concordance.vcf.gz";
+    public static final String OUTPUT_VCF_FILE_EXTENSION          = ".genotype_concordance" + IOUtil.COMPRESSED_VCF_FILE_EXTENSION;
 
     protected GenotypeConcordanceCounts snpCounter;
     public GenotypeConcordanceCounts getSnpCounter() { return snpCounter; }
@@ -321,7 +384,7 @@ public class GenotypeConcordance extends CommandLineProgram {
             final boolean stateClassified = classifyVariants(tuple.leftVariantContext, TRUTH_SAMPLE,
                     tuple.rightVariantContext, CALL_SAMPLE,
                     Optional.of(snpCounter), Optional.of(indelCounter),
-                    MIN_GQ, MIN_DP);
+                    MIN_GQ, MIN_DP, IGNORE_FILTER_STATUS);
 
             if (!stateClassified) {
                 final String condition = truthVariantContextType + " " + callVariantContextType;
@@ -416,9 +479,14 @@ public class GenotypeConcordance extends CommandLineProgram {
             callContext = tuple.rightVariantContext.get();
         }
 
+        //Don't write symbolic alleles to output VCF
+        if (truthContext != null && truthContext.isSymbolic() || callContext != null && callContext.isSymbolic()) {
+            return;
+        }
+
         // Get the alleles for each genotype.  No alleles will be extracted for a genotype if the genotype is
         // mixed, filtered, or missing.
-        final Alleles alleles = normalizeAlleles(truthContext, TRUTH_SAMPLE, callContext, CALL_SAMPLE);
+        final Alleles alleles = normalizeAlleles(truthContext, TRUTH_SAMPLE, callContext, CALL_SAMPLE, IGNORE_FILTER_STATUS);
 
         // There will be no alleles if both genotypes are one of mixed, filtered, or missing.  Do not output any
         // variant context in this case.
@@ -432,9 +500,14 @@ public class GenotypeConcordance extends CommandLineProgram {
             final List<Allele> truthAlleles = alleles.truthAlleles();
             final List<Allele> callAlleles  = alleles.callAlleles();
 
+            // Get the alleles present at this site for both samples to use for the output variant context, but remove no calls.
+            final Set<Allele> siteAlleles = new HashSet<>();
+            siteAlleles.addAll(allAlleles);
+            siteAlleles.remove(Allele.NO_CALL);
+
             // Initialize the variant context builder
             final VariantContext initialContext = (callContext == null) ? truthContext : callContext;
-            builder = new VariantContextBuilder(initialContext.getSource(), initialContext.getContig(), initialContext.getStart(), initialContext.getEnd(), Collections.emptyList());
+            builder = new VariantContextBuilder(initialContext.getSource(), initialContext.getContig(), initialContext.getStart(), initialContext.getEnd(), siteAlleles);
             builder.computeEndFromAlleles(allAlleles, initialContext.getStart());
             builder.log10PError(initialContext.getLog10PError());
 
@@ -443,10 +516,10 @@ public class GenotypeConcordance extends CommandLineProgram {
             addToGenotypes(genotypes, callContext, CALL_SAMPLE, OUTPUT_VCF_CALL_SAMPLE_NAME, allAlleles, callAlleles, false);
 
             // set the alleles and genotypes
-            builder.alleles(alleles.allAlleles).genotypes(genotypes);
+            builder.genotypes(genotypes);
 
             // set the concordance state attribute
-            final TruthAndCallStates state = GenotypeConcordance.determineState(truthContext, TRUTH_SAMPLE, callContext, CALL_SAMPLE, MIN_GQ, MIN_DP);
+            final TruthAndCallStates state = GenotypeConcordance.determineState(truthContext, TRUTH_SAMPLE, callContext, CALL_SAMPLE, MIN_GQ, MIN_DP, IGNORE_FILTER_STATUS);
             final ContingencyState[] stateArray = scheme.getConcordanceStateArray(state.truthState, state.callState);
             builder.attribute(CONTINGENCY_STATE_TAG, Arrays.asList(stateArray));
 
@@ -493,8 +566,10 @@ public class GenotypeConcordance extends CommandLineProgram {
                                            final String truthSample,
                                            final Optional<VariantContext> callContext,
                                            final String callSample,
-                                           final int minGq, final int minDp) {
-        return classifyVariants(truthContext, truthSample, callContext, callSample, Optional.empty(), Optional.empty(), minGq, minDp);
+                                           final int minGq, final int minDp,
+                                           final boolean ignoreFilterStatus) {
+        return classifyVariants(truthContext, truthSample, callContext, callSample, Optional.empty(), Optional.empty(),
+                minGq, minDp, ignoreFilterStatus);
     }
 
     /**
@@ -518,13 +593,13 @@ public class GenotypeConcordance extends CommandLineProgram {
                                            final String callSample,
                                            final Optional<GenotypeConcordanceCounts> snpCounter,
                                            final Optional<GenotypeConcordanceCounts> indelCounter,
-                                           final int minGq, final int minDp) {
+                                           final int minGq, final int minDp, final boolean ignoreFilteredStatus) {
         final VariantContext.Type truthVariantContextType = truthContext.map(VariantContext::getType).orElse(NO_VARIATION);
         final VariantContext.Type callVariantContextType  = callContext.map(VariantContext::getType).orElse(NO_VARIATION);
 
         // A flag to keep track of whether we have been able to successfully classify the Truth/Call States.
         // Unclassified include MIXED/MNP/Symbolic...
-        final TruthAndCallStates truthAndCallStates = determineState(truthContext.orElse(null), truthSample, callContext.orElse(null), callSample, minGq, minDp);
+        final TruthAndCallStates truthAndCallStates = determineState(truthContext.orElse(null), truthSample, callContext.orElse(null), callSample, minGq, minDp, ignoreFilteredStatus);
         if (truthVariantContextType == SNP) {
             if ((callVariantContextType == SNP) || (callVariantContextType == MIXED) || (callVariantContextType == NO_VARIATION)) {
                 // Note.  If truth is SNP and call is MIXED, the event will be logged in the snpCounter, with row = MIXED
@@ -668,15 +743,17 @@ public class GenotypeConcordance extends CommandLineProgram {
     }
 
     /** Inserts the given string into the destination string at the given index.  If the index is past the end of the
-     * destination string, the given string is appended to the destination.
+     * destination string, the given string is appended to the destination.  If the destination string is the
+     * spanning deletion allele it will be returned unchanged.
      */
     static String spliceOrAppendString(final String destination, final String toInsert, final int insertIdx) {
+        if (destination.equals(Allele.SPAN_DEL_STRING)) {
+            return destination;
+        }
         if (insertIdx <= destination.length()) {
             return destination.substring(0, insertIdx) + toInsert + destination.substring(insertIdx);
         }
-        else {
-            return destination + toInsert;
-        }
+        return destination + toInsert;
     }
 
     /** Gets the alleles for the truth and call genotypes.  In particular, this handles the case where indels can have different
@@ -684,14 +761,15 @@ public class GenotypeConcordance extends CommandLineProgram {
     final protected static Alleles normalizeAlleles(final VariantContext truthContext,
                                                     final String truthSample,
                                                     final VariantContext callContext,
-                                                    final String callSample) {
+                                                    final String callSample,
+                                                    final Boolean ignoreFilteredStatus) {
 
         final Genotype truthGenotype, callGenotype;
 
         if (truthContext == null || truthContext.isMixed() || truthContext.isFiltered()) truthGenotype = null;
         else truthGenotype = truthContext.getGenotype(truthSample);
 
-        if (callContext == null || callContext.isMixed() || callContext.isFiltered()) callGenotype = null;
+        if (callContext == null || callContext.isMixed() || (!ignoreFilteredStatus && callContext.isFiltered())) callGenotype = null;
         else callGenotype = callContext.getGenotype(callSample);
 
         // initialize the reference
@@ -730,8 +808,8 @@ public class GenotypeConcordance extends CommandLineProgram {
                 // Truth reference is shorter than call reference
                 final String suffix = getStringSuffix(callRef, truthRef, "Ref alleles mismatch between: " + truthContext + " and " + callContext);
                 final int insertIdx = truthRef.length();
-                truthAllele1 = spliceOrAppendString(truthAllele1, suffix, insertIdx);
-                truthAllele2 = spliceOrAppendString(truthAllele2, suffix, insertIdx);
+                truthAllele1 = truthAllele1.equals(Allele.NO_CALL_STRING) ? truthAllele1 : spliceOrAppendString(truthAllele1, suffix, insertIdx);
+                truthAllele2 = truthAllele2.equals(Allele.NO_CALL_STRING) ? truthAllele2 : spliceOrAppendString(truthAllele2, suffix, insertIdx);
                 truthRef = truthRef + suffix;
 
             }
@@ -739,8 +817,8 @@ public class GenotypeConcordance extends CommandLineProgram {
                 // call reference is shorter than truth:
                 final String suffix = getStringSuffix(truthRef, callRef, "Ref alleles mismatch between: " + truthContext + " and " + callContext);
                 final int insertIdx = callRef.length();
-                callAllele1 = spliceOrAppendString(callAllele1, suffix, insertIdx);
-                callAllele2 = spliceOrAppendString(callAllele2, suffix, insertIdx);
+                callAllele1 = callAllele1.equals(Allele.NO_CALL_STRING) ? callAllele1 : spliceOrAppendString(callAllele1, suffix, insertIdx);
+                callAllele2 = callAllele2.equals(Allele.NO_CALL_STRING) ? callAllele2 : spliceOrAppendString(callAllele2, suffix, insertIdx);
                 callRef = callRef + suffix;
             }
             else {
@@ -826,7 +904,7 @@ public class GenotypeConcordance extends CommandLineProgram {
      * @param minDp Threshold for filtering by genotype attribute DP
      * @return TruthAndCallStates object containing the TruthState and CallState determined here.
      */
-    final public static TruthAndCallStates determineState(final VariantContext truthContext, final String truthSample, final VariantContext callContext, final String callSample, final int minGq, final int minDp) {
+    final public static TruthAndCallStates determineState(final VariantContext truthContext, final String truthSample, final VariantContext callContext, final String callSample, final int minGq, final int minDp, final Boolean ignoreFilteredStatus) {
         TruthState truthState = null;
         CallState callState = null;
 
@@ -834,10 +912,14 @@ public class GenotypeConcordance extends CommandLineProgram {
 
         // Get truth and call states if they are filtered or are not going to be compared (ex. depth is less than minDP).
         final GenotypeConcordanceStateCodes truthStateCode = getStateCode(truthContext, truthSample, minGq, minDp);
+
         if (null != truthStateCode) {
             truthState = GenotypeConcordanceStates.truthMap.get(truthStateCode.ordinal());
         }
-        final GenotypeConcordanceStateCodes callStateCode = getStateCode(callContext, callSample, minGq, minDp);
+        GenotypeConcordanceStateCodes callStateCode = getStateCode(callContext, callSample, minGq, minDp);
+        if (ignoreFilteredStatus && callStateCode == GenotypeConcordanceStateCodes.VC_FILTERED_CODE) {
+            callStateCode = null;
+        }
         if (null != callStateCode) {
             callState = GenotypeConcordanceStates.callMap.get(callStateCode.ordinal());
         }
@@ -846,7 +928,7 @@ public class GenotypeConcordance extends CommandLineProgram {
                 truthState == null ? truthContext : null,
                 truthSample,
                 callState == null ? callContext : null,
-                callSample);
+                callSample, ignoreFilteredStatus);
         final OrderedSet<String> allAlleles = alleles.allAlleles;
         final String truthAllele1           = alleles.truthAllele1;
         final String truthAllele2           = alleles.truthAllele2;

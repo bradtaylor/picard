@@ -26,24 +26,53 @@ package picard.analysis;
 
 import htsjdk.samtools.util.Histogram;
 import htsjdk.samtools.util.IntervalList;
-import picard.cmdline.CommandLineProgramProperties;
-import picard.cmdline.Option;
-import picard.cmdline.programgroups.Metrics;
-
-import static picard.cmdline.StandardOptionDefinitions.MINIMUM_MAPPING_QUALITY_SHORT_NAME;
+import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
+import org.broadinstitute.barclay.help.DocumentedFeature;
+import picard.cmdline.programgroups.DiagnosticsAndQCProgramGroup;
 
 /**
  * Computes a number of metrics that are useful for evaluating coverage and performance of whole genome sequencing
- * experiments, same implementation as CollectWgsMetrics, with different defaults: lacks baseQ and mappingQ filters
+ * experiments, same implementation as {@link CollectWgsMetrics}, with different defaults: lacks baseQ and mappingQ filters
  * and has much higher coverage cap.
+ *
+ * This tool computes metrics that are useful for evaluating coverage and performance
+ * of whole genome sequencing experiments. These metrics include the percentages of reads that pass
+ * minimal base- and mapping- quality filters as well as coverage (read-depth) levels.
+ * <br /><br />
+ * The histogram output is optional and for a given run, displays two separate outputs on the y-axis while using a single set
+ * of values for the x-axis.  Specifically, the first column in the histogram table (x-axis) is labeled 'coverage' and
+ * represents different possible coverage depths.  However, it also represents the range of values for the base quality scores
+ * and thus should probably be labeled 'sequence depth and base quality scores'. The second and third columns (y-axes)
+ * correspond to the numbers of bases at a specific sequence depth 'count' and the numbers of bases at a particular base
+ * quality score 'baseq_count' respectively.
+ * <br /><br />
+ * Although similar to the {@link CollectWgsMetrics} tool, the default thresholds for CollectRawWgsMetrics are less stringent.
+ * For example, the CollectRawWgsMetrics have base and mapping quality score thresholds set to '3' and '0' respectively,
+ * while the {@link CollectWgsMetrics} tool has the default threshold values set to '20' (at time of writing).  Nevertheless, both
+ * tools enable the user to input specific threshold values.
+ * <p>Note: Metrics labeled as percentages are actually expressed as fractions!</p>
+ * <h4>Usage example:</h4>
+ * <pre>
+ * java -jar picard.jar CollectRawWgsMetrics \\<br />
+ *      I=input.bam \\<br />
+ *      O=output_raw_wgs_metrics.txt \\<br />
+ *      R=reference.fasta \\<br />
+ *      INCLUDE_BQ_HISTOGRAM=true
+ * </pre>
+ * <hr />
+ * Please see
+ * <a href='https://broadinstitute.github.io/picard/picard-metric-definitions.html#CollectWgsMetrics.WgsMetrics'>
+ * the WgsMetrics documentation</a> for detailed explanations of the output metrics.
+ * <hr />
  *
  * @author farjoun
  */
 @CommandLineProgramProperties(
-        usage = CollectRawWgsMetrics.USAGE_SUMMARY + CollectRawWgsMetrics.USAGE_DETAILS,
-        usageShort = CollectRawWgsMetrics.USAGE_SUMMARY,
-        programGroup = Metrics.class
+        summary = CollectRawWgsMetrics.USAGE_SUMMARY + CollectRawWgsMetrics.USAGE_DETAILS,
+        oneLineSummary = CollectRawWgsMetrics.USAGE_SUMMARY,
+        programGroup = DiagnosticsAndQCProgramGroup.class
 )
+@DocumentedFeature
 public class CollectRawWgsMetrics extends CollectWgsMetrics{
     static final String USAGE_SUMMARY = "Collect whole genome sequencing-related metrics.  ";
     static final String USAGE_DETAILS = "This tool computes metrics that are useful for evaluating coverage and performance " +
@@ -66,8 +95,8 @@ public class CollectRawWgsMetrics extends CollectWgsMetrics{
             "<pre>" +
             "java -jar picard.jar CollectRawWgsMetrics \\<br />" +
             "      I=input.bam \\<br />" +
-            "      O=raw_wgs_metrics.txt \\<br />" +
-            "      R=reference_sequence.fasta \\<br />" +
+            "      O=output_raw_wgs_metrics.txt \\<br />" +
+            "      R=reference.fasta \\<br />" +
             "      INCLUDE_BQ_HISTOGRAM=true" +
             "</pre>" +
             "<hr />" +
@@ -75,17 +104,14 @@ public class CollectRawWgsMetrics extends CollectWgsMetrics{
             "<a href='https://broadinstitute.github.io/picard/picard-metric-definitions.html#CollectWgsMetrics.WgsMetrics'>" +
             "the WgsMetrics documentation</a> for detailed explanations of the output metrics." +
             "<hr />";
-    @Option(shortName=MINIMUM_MAPPING_QUALITY_SHORT_NAME, doc="Minimum mapping quality for a read to contribute coverage.")
-    public int MINIMUM_MAPPING_QUALITY = 0;
 
-    @Option(shortName="Q", doc="Minimum base quality for a base to contribute coverage.")
-    public int MINIMUM_BASE_QUALITY = 3;
-
-    @Option(shortName="CAP", doc="Treat bases with coverage exceeding this value as if they had coverage at this value.")
-    public int COVERAGE_CAP = 100000;
-
-    @Option(doc="At positions with coverage exceeding this value, completely ignore reads that accumulate beyond this value (so that they will not be considered for PCT_EXC_CAPPED).  Used to keep memory consumption in check, but could create bias if set too low")
-    public int LOCUS_ACCUMULATION_CAP = 200000;
+    public CollectRawWgsMetrics() {
+        //Override default values inherited from CollectWgsMetrics
+        MINIMUM_MAPPING_QUALITY = 0;
+        MINIMUM_BASE_QUALITY = 3;
+        COVERAGE_CAP = 100000;
+        LOCUS_ACCUMULATION_CAP = 200000;
+    }
 
     // rename the class so that in the metric file it is annotated differently.
     public static class RawWgsMetrics extends WgsMetrics {

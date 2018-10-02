@@ -24,54 +24,76 @@
 
 package picard.fastq;
 
+import org.broadinstitute.barclay.argparser.Argument;
+import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
+import org.broadinstitute.barclay.help.DocumentedFeature;
 import picard.cmdline.CommandLineProgram;
-import picard.cmdline.CommandLineProgramProperties;
-import picard.cmdline.Option;
 import picard.cmdline.StandardOptionDefinitions;
-import picard.cmdline.programgroups.SamOrBam;
+import picard.cmdline.programgroups.ReadDataManipulationProgramGroup;
 
 import java.io.File;
 
 /**
- * CommandLineProgram to generate to bfq files for use by the Maq aligner
+ * Converts a BAM file into a BFQ (binary fastq formatted) file.
+ * <p>
+ * The BFQ format is the input format to some tools like Maq aligner.
+ * </p>
+ * <h3>Input</h3>
+ * <p>A single BAM file to convert</p>.
+ * <h3>Output</h3>
+ * <p>One or two FASTQ files depending on whether the BAM file contains single- or
+ * paired-end sequencing data. You must indicate the output directory that will contain these files (<code>ANALYSIS_DIR</code>)
+ * and the output file name prefix (<code>OUTPUT_FILE_PREFIX</code>).</p>
+ * <h3>Usage example:</h3>
+ * <pre>
+ *     java -jar picard.jar BamToBfq \
+ *             I=input.bam \
+ *             ANALYSIS_DIR=output_dir \
+ *             OUTPUT_FILE_PREFIX=output_name \
+ *             PAIRED_RUN=false
+ * </pre>
  *
  * @author ktibbett@broadinstitute.org
  */
 @CommandLineProgramProperties(
-        usage = BamToBfq.USAGE_SUMMARY + BamToBfq.USAGE_DETAILS,
-        usageShort = BamToBfq.USAGE_SUMMARY,
-        programGroup = SamOrBam.class
-)
+        summary = "<p>" + BamToBfq.USAGE_SUMMARY + ".</p>" + BamToBfq.USAGE_DETAILS,
+        oneLineSummary = BamToBfq.USAGE_SUMMARY,
+        programGroup = ReadDataManipulationProgramGroup.class)
+@DocumentedFeature
 public class BamToBfq extends CommandLineProgram {
-    static final String USAGE_SUMMARY = "Create BFQ files from a BAM file for use by the maq aligner.  ";
-    static final String USAGE_DETAILS = "BFQ is a binary version of the FASTQ file format. This tool creates bfq files from a BAM file " +
-            "for use by the maq aligner." +
-            "<br />" +
-            "<h4>Usage example:</h4>" +
-            "<pre>" +
-            "java -jar picard.jar BamToBfq \\<br />" +
-            "      I=input.bam \\<br />" +
-            "      ANALYSIS_DIR=analysis_dir \\<br />" +
-            "      OUTPUT_FILE_PREFIX=output_file_1 \\<br />" +
-            "      PAIRED_RUN=false" +
-            "</pre>" +
-            "<hr />"
-            ;
+    static final String USAGE_SUMMARY =
+    		"Converts a BAM file into a BFQ (binary fastq formatted) file";
+    static final String USAGE_DETAILS =
+    		 "<p>The BFQ format is the input format to some tools like Maq aligner.</p>" +
+    		 "<h3>Input</h3>" +
+    		 "<p>A single BAM file to convert</p>" +
+    		 "<h3>Output</h3>" +
+    		 "<p>One or two FASTQ files depending on whether the BAM file contains single- or " +
+    		 "paired-end sequencing data. You must indicate the output directory that will contain these files (<code>ANALYSIS_DIR</code>) " +
+    		 "and the output file name prefix (<code>OUTPUT_FILE_PREFIX</code>).</p>" +
+    		 "<h3>Usage example:</h3>" +
+    		 "<pre>" +
+    		 "java -jar picard.jar BamToBfq \\\n" +
+    		 "     I=input.bam \\\n" +
+    		 "     ANALYSIS_DIR=output_dir \\\n" +
+    		 "     OUTPUT_FILE_PREFIX=output_name \\\n" +
+    		 "     PAIRED_RUN=false" +
+    		 "</pre><hr />";
     // The following attributes define the command-line arguments
 
-    @Option(doc="The BAM file to parse.", shortName=StandardOptionDefinitions.INPUT_SHORT_NAME) public File INPUT;
-    @Option(doc="The analysis directory for the binary output file. ") public File ANALYSIS_DIR;
-    @Option(doc="Flowcell barcode (e.g. 30PYMAAXX).  ", shortName="F", mutex="OUTPUT_FILE_PREFIX") public String FLOWCELL_BARCODE;
-    @Option(doc="Lane number. ", shortName= StandardOptionDefinitions.LANE_SHORT_NAME, optional=true,mutex="OUTPUT_FILE_PREFIX") public Integer LANE;
-    @Option(doc="Prefix for all output files", mutex={"FLOWCELL_BARCODE","LANE"}) public String OUTPUT_FILE_PREFIX;
-    @Option(doc="Number of reads to align (null = all).", shortName="NUM", optional=true) public Integer READS_TO_ALIGN;
-    @Option(doc="Number of reads to break into individual groups for alignment", shortName="CHUNK") public Integer READ_CHUNK_SIZE = 2000000;
-    @Option(doc="Whether this is a paired-end run. ", shortName="PE") public Boolean PAIRED_RUN;
-    @Option(doc="Deprecated option; use READ_NAME_PREFIX instead", mutex="READ_NAME_PREFIX", shortName="RB", optional=true) public String RUN_BARCODE;
-    @Option(doc="Prefix to be stripped off the beginning of all read names  (to make them short enough to run in Maq)", optional=true) public String READ_NAME_PREFIX;
-    @Option(doc="Whether to include non-PF reads", shortName="NONPF", optional=true) public Boolean INCLUDE_NON_PF_READS = false;
-    @Option(doc="Whether to clip adapters from the reads") public boolean CLIP_ADAPTERS = true;
-    @Option(doc="The number of bases from each read to write to the bfq file.  If this is non-null, then " +
+    @Argument(doc="The BAM file to parse.", shortName=StandardOptionDefinitions.INPUT_SHORT_NAME) public File INPUT;
+    @Argument(doc="The analysis directory for the binary output file. ") public File ANALYSIS_DIR;
+    @Argument(doc="Flowcell barcode (e.g. 30PYMAAXX).  ", shortName="F", mutex="OUTPUT_FILE_PREFIX") public String FLOWCELL_BARCODE;
+    @Argument(doc="Lane number. ", shortName= StandardOptionDefinitions.LANE_SHORT_NAME, optional=true,mutex="OUTPUT_FILE_PREFIX") public Integer LANE;
+    @Argument(doc="Prefix for all output files", mutex={"FLOWCELL_BARCODE","LANE"}) public String OUTPUT_FILE_PREFIX;
+    @Argument(doc="Number of reads to align (null = all).", shortName="NUM", optional=true) public Integer READS_TO_ALIGN;
+    @Argument(doc="Number of reads to break into individual groups for alignment", shortName="CHUNK") public Integer READ_CHUNK_SIZE = 2000000;
+    @Argument(doc="Whether this is a paired-end run. ", shortName="PE") public Boolean PAIRED_RUN;
+    @Argument(doc="Deprecated option; use READ_NAME_PREFIX instead", mutex="READ_NAME_PREFIX", shortName="RB", optional=true) public String RUN_BARCODE;
+    @Argument(doc="Prefix to be stripped off the beginning of all read names  (to make them short enough to run in Maq)", optional=true) public String READ_NAME_PREFIX;
+    @Argument(doc="Whether to include non-PF reads", shortName="NONPF", optional=true) public Boolean INCLUDE_NON_PF_READS = false;
+    @Argument(doc="Whether to clip adapters from the reads") public boolean CLIP_ADAPTERS = true;
+    @Argument(doc="The number of bases from each read to write to the bfq file.  If this is non-null, then " +
             "only the first BASES_TO_WRITE bases from each read will be written.", optional=true) public Integer BASES_TO_WRITE = null;
 
     protected int doWork() {

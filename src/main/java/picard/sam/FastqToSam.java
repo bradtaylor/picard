@@ -44,112 +44,178 @@ import htsjdk.samtools.util.QualityEncodingDetector;
 import htsjdk.samtools.util.SequenceUtil;
 import htsjdk.samtools.util.SolexaQualityConverter;
 import htsjdk.samtools.util.StringUtil;
+import org.broadinstitute.barclay.argparser.Argument;
+import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
+import org.broadinstitute.barclay.help.DocumentedFeature;
 import picard.PicardException;
 import picard.cmdline.CommandLineProgram;
-import picard.cmdline.CommandLineProgramProperties;
-import picard.cmdline.Option;
 import picard.cmdline.StandardOptionDefinitions;
-import picard.cmdline.programgroups.SamOrBam;
+import picard.cmdline.programgroups.ReadDataManipulationProgramGroup;
 
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Converts a fastq file to an unaligned BAM/SAM format.
- * See <a href="http://maq.sourceforge.net/fastq.shtml">MAQ FastQ specification</a> for details.
- * Three fastq versions are supported: FastqSanger, FastqSolexa and FastqIllumina.
- * Input files can be in GZip format (end in .gz).
+ * Converts a FASTQ file to an unaligned BAM or SAM file.
+ * <p>
+ *     Output read records will contain the original base calls and quality scores will be
+ *     translated depending on the base quality score encoding: FastqSanger, FastqSolexa and FastqIllumina.
+ * </p>
+ * <p>
+ *     There are also arguments to provide values for SAM header and read attributes that are not present in FASTQ
+ *     (e.g see <code>RG</code> or <code>SM</code> below).
+ * </p>
+ * <h3>Inputs</h3>
+ * <p>
+ *     One FASTQ file name for single-end or two for pair-end sequencing input data.
+ *     These files might be in gzip compressed format (when file name is ending with ".gz").
+ * </p>
+ * <p>
+ *     Alternatively, for larger inputs you can provide a collection of FASTQ files indexed by their name (see <code>USE_SEQUENCIAL_FASTQ</code> for details below).
+ * </p>
+ * <p>
+ *     By default, this tool will try to guess the base quality score encoding. However you can indicate it explicitly
+ *     using the <code>QUALITY_FORMAT</code> argument.
+ * </p>
+ * <h3>Output</h3>
+ * A single unaligned BAM or SAM file. By default, the records are sorted by query (read) name.
+ * <h3>Usage examples</h3>
+ *
+ * <h4>Example 1:</h4>
+ * <p>
+ *     Single-end sequencing FASTQ file conversion. All reads are annotated
+ *     as belonging to the "rg0013" read group that in turn is part of the sample "sample001".
+ * </p>
+ * <pre>
+ * java -jar picard.jar FastqToSam \
+ *      F1=input_reads.fastq \
+ *      O=unaligned_reads.bam \
+ *      SM=sample001 \
+ *      RG=rg0013
+ * </pre>
+ * <h4>Example 2:</h4>
+ * <p>
+ *     Similar to example 1 above, but for paired-end sequencing.
+ * </p>
+ * <pre>
+ * java -jar picard.jar FastqToSam \
+ *      F1=forward_reads.fastq \
+ *      F2=reverse_reads.fastq \
+ *      O=unaligned_read_pairs.bam \
+ *      SM=sample001 \
+ *      RG=rg0013 
+ * </pre>
  */
 @CommandLineProgramProperties(
-        usage = FastqToSam.USAGE_SUMMARY + FastqToSam.USAGE_DETAILS,
-        usageShort = FastqToSam.USAGE_SUMMARY,
-        programGroup = SamOrBam.class
-)
+        summary = "<p>" + FastqToSam.USAGE_SUMMARY + ".</p>" + FastqToSam.USAGE_DETAILS,
+        oneLineSummary = FastqToSam.USAGE_SUMMARY,
+        programGroup = ReadDataManipulationProgramGroup.class)
+@DocumentedFeature
 public class FastqToSam extends CommandLineProgram {
-    static final String USAGE_SUMMARY = "Converts a FASTQ file to an unaligned BAM or SAM file.  ";
-    static final String USAGE_DETAILS = "This tool extracts read sequences and base qualities from the input FASTQ file and writes them" +
-            " out to a new file in unaligned BAM (uBAM) format. Read group information can be provided on the command line. <br /><br />  " +
-            "Three versions of FASTQ quality scales are supported: FastqSanger, FastqSolexa and FastqIllumina " +
-            "(see http://maq.sourceforge.net/fastq.shtml for details). Input FASTQ files can be in GZip format " +
-            "(with .gz extension)." +
-            "<h4>Usage example:</h4>" +
-            "<pre>" +
-            "java -jar picard.jar FastqToSam \\<br />" +
-            "      F1=file_1.fastq \\<br />" +
-            "      O=fastq_to_bam.bam \\<br />" +
-            "      SM=for_tool_testing " +
-            "</pre>" +
-            "<hr />";
+    static final String USAGE_SUMMARY = 
+    		"Converts a FASTQ file to an unaligned BAM or SAM file";
+    static final String USAGE_DETAILS = 
+    		"<p>Output read records will contain the original base calls and quality scores will be " +
+    		"translated depending on the base quality score encoding: FastqSanger, FastqSolexa and FastqIllumina.</p>" +
+        "<p>There are also arguments to provide values for SAM header and read attributes that are not present in FASTQ " +
+        "(e.g see RG or SM below).</p>" + 
+        "<h3>Inputs</h3>" +
+        "<p>One FASTQ file name for single-end or two for pair-end sequencing input data. " +
+        "These files might be in gzip compressed format (when file name is ending with \".gz\").</p>" +
+        "<p>Alternatively, for larger inputs you can provide a collection of FASTQ files indexed by their name " + 
+        "(see USE_SEQUENCIAL_FASTQ for details below).</p>" +
+        "<p>By default, this tool will try to guess the base quality score encoding. However you can indicate it explicitly " +
+        "using the QUALITY_FORMAT argument.</p>" +
+        "<h3>Output</h3>" +
+        "<p>A single unaligned BAM or SAM file. By default, the records are sorted by query (read) name.</p>" +
+        "<h3>Usage examples</h3>" +
+        "<h4>Example 1:</h4>" + 
+        "<p>Single-end sequencing FASTQ file conversion. All reads are annotated " + 
+        "as belonging to the \"rg0013\" read group that in turn is part of the sample \"sample001\".</p>" + 
+        "<pre>java -jar picard.jar FastqToSam \\\n" +
+        "        F1=input_reads.fastq \\\n" +
+        "        O=unaligned_reads.bam \\\n" + 
+        "        SM=sample001 \\\n" + 
+        "        RG=rg0013</pre>" +
+        "<h4>Example 2:</h4>" + 
+        "<p>Similar to example 1 above, but for paired-end sequencing.</p>" + 
+        "<pre>java -jar picard.jar FastqToSam \\\n" +
+        "       F1=forward_reads.fastq \\\n" + 
+        "       F2=reverse_reads.fastq \\\n" +
+        "       O=unaligned_read_pairs.bam \\\n" + 
+        "       SM=sample001 \\\n" + 
+        "       RG=rg0013</pre><hr />";
+    
     private static final Log LOG = Log.getInstance(FastqToSam.class);
 
-    @Option(shortName="F1", doc="Input fastq file (optionally gzipped) for single end data, or first read in paired end data.")
+    @Argument(shortName="F1", doc="Input fastq file (optionally gzipped) for single end data, or first read in paired end data.")
     public File FASTQ;
 
-    @Option(shortName="F2", doc="Input fastq file (optionally gzipped) for the second read of paired end data.", optional=true)
+    @Argument(shortName="F2", doc="Input fastq file (optionally gzipped) for the second read of paired end data.", optional=true)
     public File FASTQ2;
     
-    @Option(doc="Use sequential fastq files with the suffix <prefix>_###.fastq or <prefix>_###.fastq.gz", optional=true)
+    @Argument(doc="Use sequential fastq files with the suffix <prefix>_###.fastq or <prefix>_###.fastq.gz", optional=true)
     public boolean USE_SEQUENTIAL_FASTQS = false;
 
-    @Option(shortName="V", doc="A value describing how the quality values are encoded in the input FASTQ file.  " +
+    @Argument(shortName="V", doc="A value describing how the quality values are encoded in the input FASTQ file.  " +
             "Either Solexa (phred scaling + 66), Illumina (phred scaling + 64) or Standard (phred scaling + 33).  " +
             "If this value is not specified, the quality format will be detected automatically.", optional = true)
     public FastqQualityFormat QUALITY_FORMAT;
 
-    @Option(doc="Output SAM/BAM file. ", shortName=StandardOptionDefinitions.OUTPUT_SHORT_NAME) 
+    @Argument(doc="Output SAM/BAM file. ", shortName=StandardOptionDefinitions.OUTPUT_SHORT_NAME)
     public File OUTPUT ;
 
-    @Option(shortName="RG", doc="Read group name")
+    @Argument(shortName="RG", doc="Read group name")
     public String READ_GROUP_NAME = "A";
 
-    @Option(shortName="SM", doc="Sample name to insert into the read group header")
+    @Argument(shortName="SM", doc="Sample name to insert into the read group header")
     public String SAMPLE_NAME;
 
-    @Option(shortName="LB", doc="The library name to place into the LB attribute in the read group header", optional=true)
+    @Argument(shortName="LB", doc="The library name to place into the LB attribute in the read group header", optional=true)
     public String LIBRARY_NAME;
 
-    @Option(shortName="PU", doc="The platform unit (often run_barcode.lane) to insert into the read group header", optional=true)
+    @Argument(shortName="PU", doc="The platform unit (often run_barcode.lane) to insert into the read group header", optional=true)
     public String PLATFORM_UNIT;
 
-    @Option(shortName="PL", doc="The platform type (e.g. illumina, solid) to insert into the read group header", optional=true)
+    @Argument(shortName="PL", doc="The platform type (e.g. illumina, solid) to insert into the read group header", optional=true)
     public String PLATFORM;
 
-    @Option(shortName="CN", doc="The sequencing center from which the data originated", optional=true)
+    @Argument(shortName="CN", doc="The sequencing center from which the data originated", optional=true)
     public String SEQUENCING_CENTER;
 
-    @Option(shortName = "PI", doc = "Predicted median insert size, to insert into the read group header", optional = true)
+    @Argument(shortName = "PI", doc = "Predicted median insert size, to insert into the read group header", optional = true)
     public Integer PREDICTED_INSERT_SIZE;
 
-    @Option(shortName = "PG", doc = "Program group to insert into the read group header.", optional=true)
+    @Argument(shortName = "PG", doc = "Program group to insert into the read group header.", optional=true)
     public String PROGRAM_GROUP;
 
-    @Option(shortName = "PM", doc = "Platform model to insert into the group header (free-form text providing further details of the platform/technology used)", optional=true)
+    @Argument(shortName = "PM", doc = "Platform model to insert into the group header (free-form text providing further details of the platform/technology used)", optional=true)
     public String PLATFORM_MODEL;
 
-    @Option(doc="Comment(s) to include in the merged output file's header.", optional=true, shortName="CO")
+    @Argument(doc="Comment(s) to include in the merged output file's header.", optional=true, shortName="CO")
     public List<String> COMMENT = new ArrayList<String>();
 
-    @Option(shortName = "DS", doc = "Inserted into the read group header", optional = true)
+    @Argument(shortName = "DS", doc = "Inserted into the read group header", optional = true)
     public String DESCRIPTION;
 
-    @Option(shortName = "DT", doc = "Date the run was produced, to insert into the read group header", optional = true)
+    @Argument(shortName = "DT", doc = "Date the run was produced, to insert into the read group header", optional = true)
     public Iso8601Date RUN_DATE;
 
-    @Option(shortName="SO", doc="The sort order for the output sam/bam file.")
+    @Argument(shortName="SO", doc="The sort order for the output sam/bam file.")
     public SortOrder SORT_ORDER = SortOrder.queryname;
 
-    @Option(doc="Minimum quality allowed in the input fastq.  An exception will be thrown if a quality is less than this value.")
+    @Argument(doc="Minimum quality allowed in the input fastq.  An exception will be thrown if a quality is less than this value.")
     public int MIN_Q = 0;
 
-    @Option(doc="Maximum quality allowed in the input fastq.  An exception will be thrown if a quality is greater than this value.")
+    @Argument(doc="Maximum quality allowed in the input fastq.  An exception will be thrown if a quality is greater than this value.")
     public int MAX_Q = SAMUtils.MAX_PHRED_SCORE;
 
     @Deprecated
-    @Option(doc="Deprecated (No longer used). If true and this is an unpaired fastq any occurrence of '/1' or '/2' will be removed from the end of a read name.")
+    @Argument(doc="Deprecated (No longer used). If true and this is an unpaired fastq any occurrence of '/1' or '/2' will be removed from the end of a read name.")
     public Boolean STRIP_UNPAIRED_MATE_NUMBER = false;
 
-    @Option(doc="Allow (and ignore) empty lines")
+    @Argument(doc="Allow (and ignore) empty lines")
     public Boolean ALLOW_AND_IGNORE_EMPTY_LINES = false;
 
     private static final SolexaQualityConverter solexaQualityConverter = SolexaQualityConverter.getSingleton();

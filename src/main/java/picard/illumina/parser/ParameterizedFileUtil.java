@@ -24,6 +24,7 @@ public abstract class ParameterizedFileUtil {
     protected Pattern matchPattern;
 
     protected final int lane;
+
     protected List<Integer> tiles;
     /**
      * If you think of the file system as a tree, this is the deepest directory(node) on the tree that
@@ -149,9 +150,9 @@ public abstract class ParameterizedFileUtil {
     }
 
     /**
-     * The period separator is expected in the file extension, since some do not start with it
+     * Escape the period character.
      */
-    private String escapePeriods(final String preEscaped) {
+    public static String escapePeriods(final String preEscaped) {
         return preEscaped
                 .replaceAll("\\.", "\\."); //In the first one the \\ is inside a regex in the second it's NOT
     }
@@ -165,6 +166,17 @@ public abstract class ParameterizedFileUtil {
         } else {
             return fileNameEndPattern;
         }
+    }
+
+    protected File getRunFile(final File baseDirectory, final Pattern pattern) {
+        if (baseDirectory.exists()) {
+            IOUtil.assertDirectoryIsReadable(baseDirectory);
+            final File[] files = IOUtil.getFilesMatchingRegexp(baseDirectory, pattern);
+            if (files.length == 1) {
+                return files[0];
+            }
+        }
+        return null;
     }
 
     /**
@@ -185,4 +197,18 @@ public abstract class ParameterizedFileUtil {
         return fileMap;
     }
 
+    public void setTiles(List<Integer> tiles) {
+        this.tiles = tiles;
+    }
+
+    public void setTilesForPerRunFile(List<Integer> tiles) {
+    }
+
+    public boolean checkTileCount() {
+        return true;
+    }
+
+    public static String makeBarcodeRegex(int lane) {
+        return makeLaneTileRegex("_barcode.txt(\\.gz|\\.bz2)?", lane);
+    }
 }

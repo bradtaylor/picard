@@ -124,6 +124,8 @@ public abstract class TargetMetricsCollector<METRIC_TYPE extends MultilevelMetri
 
     private static final double LOG_ODDS_THRESHOLD = 3.0;
 
+    private final File theoreticalSensitivityOutput = null;
+
     private final int minimumMappingQuality;
     private final int minimumBaseQuality;
     private final boolean clipOverlappingReads;
@@ -538,7 +540,13 @@ public abstract class TargetMetricsCollector<METRIC_TYPE extends MultilevelMetri
                 final int numOverlappingBasesToClip = SAMUtils.getNumOverlappingAlignedBasesToClip(record);
                 rec = SAMUtils.clipOverlappingAlignedBases(record, numOverlappingBasesToClip, noSideEffects);
                 metrics.PCT_EXC_OVERLAP += numOverlappingBasesToClip;
-            } else rec = record;
+
+                // If clipping resulted in the read becoming unmapped (because all bases were clipped), return here
+                if (rec.getReadUnmappedFlag()) return;
+            }
+            else {
+                rec = record;
+            }
 
             // Find the target overlaps
             final Set<Interval> coveredTargets = new HashSet<>();
@@ -585,7 +593,7 @@ public abstract class TargetMetricsCollector<METRIC_TYPE extends MultilevelMetri
 
                             // we do not want to increment the base quality histogram for bases that will eventually get thrown out by the coverage cap
                             if (unfilteredCoverageByTarget.get(target).getDepths()[targetOffset] <= coverageCap){
-                                baseQHistogramArray[baseQualities[offset]]++;
+                                baseQHistogramArray[qual]++;
                             }
                         }
                     }
@@ -631,6 +639,9 @@ public abstract class TargetMetricsCollector<METRIC_TYPE extends MultilevelMetri
             // the number of bases we counted towards the depth histogram plus those that got thrown out by the coverage cap
             long totalCoverage = 0;
 
+            // the maximum depth at any target base
+            long maxDepth = 0;
+
             // The "how many target bases at at-least X" calculations.
             // downstream code relies on this array being sorted in ascending order
             final int[] targetBasesDepth = {0, 1, 2, 10, 20, 30, 40, 50, 100};
@@ -651,6 +662,7 @@ public abstract class TargetMetricsCollector<METRIC_TYPE extends MultilevelMetri
                 for (final int depth : c.getDepths()) {
                     totalCoverage += depth;
                     highQualityCoverageHistogramArray[Math.min(depth, coverageCap)]++;
+                    maxDepth = Math.max(maxDepth, depth);
 
                     // Add to the "how many target bases at at-least X" calculations.
                     for (int i = 0; i < targetBasesDepth.length; i++) {
@@ -671,6 +683,7 @@ public abstract class TargetMetricsCollector<METRIC_TYPE extends MultilevelMetri
             // we do this instead of highQualityDepthHistogram.getMean() because the histogram imposes a coverage cap
             metrics.MEAN_TARGET_COVERAGE = (double) totalCoverage / metrics.TARGET_TERRITORY;
             metrics.MEDIAN_TARGET_COVERAGE = highQualityDepthHistogram.getMedian();
+            metrics.MAX_TARGET_COVERAGE = maxDepth;
 
             // compute the coverage value such that 80% of target bases have better coverage than it i.e. 20th percentile
             // this roughly measures how much we must sequence extra such that 80% of target bases have coverage at least as deep as the current mean coverage
@@ -869,8 +882,13 @@ public abstract class TargetMetricsCollector<METRIC_TYPE extends MultilevelMetri
 
         /** Adds a single point of depth at the desired offset into the coverage array. */
         public void addBase(final int offset) {
-            if (offset >= 0 && offset < this.depths.length && this.depths[offset] < Integer.MAX_VALUE) {
-                this.depths[offset] += 1;
+            addBase(offset, 1);
+        }
+
+        /** Adds some depth at the desired offset into the coverage array. */
+        public void addBase(final int offset, final int depth) {
+            if (offset >= 0 && offset < this.depths.length && this.depths[offset] < Integer.MAX_VALUE - depth) {
+                this.depths[offset] += depth;
             }
         }
 
@@ -892,9 +910,11 @@ public abstract class TargetMetricsCollector<METRIC_TYPE extends MultilevelMetri
         /** Gets the coverage depths as an array of ints. */
         public int[] getDepths() { return this.depths; }
 
-        public int getTotal() {
-            int total = 0;
-            for (int i=0; i<depths.length; ++i) total += depths[i];
+        public long getTotal() {
+            long total = 0;
+            for (int i=0; i<depths.length; ++i) {
+                total += (total < Long.MAX_VALUE - depths[i]) ? depths[i] : Long.MAX_VALUE - total;
+            }
             return total;
         }
 
@@ -903,166 +923,12 @@ public abstract class TargetMetricsCollector<METRIC_TYPE extends MultilevelMetri
             return "TargetedMetricCollector(interval=" + interval + ", depths = [" + StringUtil.intValuesToString(this.depths) + "])";
         }
     }
-}
 
-/**
- * For a sequencing run targeting specific regions of the genome this metric class holds metrics describing
- * how well those regions were targeted.
- */
-class TargetMetrics extends MultilevelMetrics {
-    /**  The name of the PROBE_SET (BAIT_SET, AMPLICON_SET, ...) used in this metrics collection run */
-    public String PROBE_SET;
+    public Histogram<Integer> getBaseQualityHistogram() {
+        return unfilteredBaseQHistogram;
+    }
 
-    /** The number of unique bases covered by the intervals of all probes in the probe set */
-    public long PROBE_TERRITORY;
-
-    /** The number of unique bases covered by the intervals of all targets that should be covered */
-    public long TARGET_TERRITORY;
-
-    /** The number of bases in the reference genome used for alignment. */
-    public long GENOME_SIZE;
-
-    /** The total number of reads in the SAM or BAM file examined. */
-    public long TOTAL_READS;
-
-    /** The number of passing filter reads (PF). */
-    public long PF_READS;
-
-    /** The number of bases in the PF_READS of a SAM or BAM file */
-    public long PF_BASES;
-
-    /** The number of PF_READS that are not marked as duplicates. */
-    public long PF_UNIQUE_READS;
-
-    /** Tracks the number of read pairs that we see that are PF (used to calculate library size) */
-    public long PF_SELECTED_PAIRS;
-
-    /** Tracks the number of unique PF_SELECTED_PAIRS we see (used to calc library size) */
-    public long PF_SELECTED_UNIQUE_PAIRS;
-
-    /** The number of PF_UNIQUE_READS that are aligned with mapping score > 0 to the reference genome. */
-    public long PF_UQ_READS_ALIGNED;
-
-    /** The number of PF_BASES that are aligned with mapping score > 0 to the reference genome. */
-    public long PF_BASES_ALIGNED;
-
-    /** The number of PF unique bases that are aligned with mapping score > 0 to the reference genome. */
-    public long PF_UQ_BASES_ALIGNED;
-
-    /** The number of PF aligned probed bases that mapped to a baited region of the genome. */
-    public long ON_PROBE_BASES;
-
-    /** The number of PF aligned bases that mapped to within a fixed interval of a probed region, but not on a
-     *  baited region. */
-    public long NEAR_PROBE_BASES;
-
-    /** The number of PF aligned bases that mapped to neither on or near a probe. */
-    public long OFF_PROBE_BASES;
-
-    /** The number of PF aligned bases that mapped to a targeted region of the genome. */
-    public long ON_TARGET_BASES;
-
-    /** The number of PF aligned bases that are mapped in pair to a targeted region of the genome. */
-    public long ON_TARGET_FROM_PAIR_BASES;
-
-    //metrics below here are derived after collection
-
-    /** The fraction of reads passing filter, PF_READS/TOTAL_READS.   */
-    public double PCT_PF_READS;
-
-    /** The fraction of unique reads passing filter, PF_UNIQUE_READS/TOTAL_READS. */
-    public double PCT_PF_UQ_READS;
-
-    /** The fraction of unique reads passing filter that align to the reference,
-     * PF_UQ_READS_ALIGNED/PF_UNIQUE_READS. */
-    public double PCT_PF_UQ_READS_ALIGNED;
-
-    /** The fraction of bases that map on or near a probe (ON_PROBE_BASES + NEAR_PROBE_BASES)/(ON_PROBE_BASES +
-     * NEAR_PROBE_BASES + OFF_PROBE_BASES). */
-    public double PCT_SELECTED_BASES;
-
-    /** The fraction of aligned PF bases that mapped neither on or near a probe, OFF_PROBE_BASES/(ON_PROBE_BASES +
-     *  NEAR_PROBE_BASES + OFF_PROBE_BASES). */
-    public double PCT_OFF_PROBE;
-
-    /** The fraction of on+near probe bases that are on as opposed to near, ON_PROBE_BASES/(ON_PROBE_BASES +
-     * NEAR_PROBE_BASES). */
-    public double ON_PROBE_VS_SELECTED;
-
-    /** The mean coverage of all probes in the experiment, ON_PROBE_BASES/PROBE_TERRITORY. */
-    public double MEAN_PROBE_COVERAGE;
-
-    /** The fold by which the probed region has been amplified above genomic background,
-     * (ON_PROBE_BASES/(ON_PROBE_BASES + NEAR_PROBE_BASES + OFF_PROBE_BASES))/(PROBE_TERRITORY/GENOME_SIZE) */
-    public double FOLD_ENRICHMENT;
-
-    /** The mean coverage of targets. */
-    public double MEAN_TARGET_COVERAGE;
-
-    /** The median coverage of targets. */
-    public double MEDIAN_TARGET_COVERAGE;
-
-    /** The fraction of targets that did not reach coverage=1 over any base. */
-    public double ZERO_CVG_TARGETS_PCT;
-
-    /** The fraction of aligned bases that were filtered out because they were in reads marked as duplicates. */
-    public double PCT_EXC_DUPE;
-
-    /** The fraction of aligned bases that were filtered out because they were in reads with low mapping quality. */
-    public double PCT_EXC_MAPQ;
-
-    /** The fraction of aligned bases that were filtered out because they were of low base quality. */
-    public double PCT_EXC_BASEQ;
-
-    /** The fraction of aligned bases that were filtered out because they were the second observation from
-     *  an insert with overlapping reads. */
-    public double PCT_EXC_OVERLAP;
-
-    /** The fraction of aligned bases that were filtered out because they did not align over a target base. */
-    public double PCT_EXC_OFF_TARGET;
-
-    /**
-     * The fold over-coverage necessary to raise 80% of bases in "non-zero-cvg" targets to
-     * the mean coverage level in those targets.
-     */
-    public double FOLD_80_BASE_PENALTY;
-
-    /** The fraction of all target bases achieving 1X or greater coverage. */
-    public double PCT_TARGET_BASES_1X;
-    /** The fraction of all target bases achieving 2X or greater coverage. */
-    public double PCT_TARGET_BASES_2X;
-    /** The fraction of all target bases achieving 10X or greater coverage. */
-    public double PCT_TARGET_BASES_10X;
-    /** The fraction of all target bases achieving 20X or greater coverage. */
-    public double PCT_TARGET_BASES_20X;
-    /** The fraction of all target bases achieving 30X or greater coverage. */
-    public double PCT_TARGET_BASES_30X;
-    /** The fraction of all target bases achieving 40X or greater coverage. */
-    public double PCT_TARGET_BASES_40X;
-    /** The fraction of all target bases achieving 50X or greater coverage. */
-    public double PCT_TARGET_BASES_50X;
-    /** The fraction of all target bases achieving 100X or greater coverage. */
-    public double PCT_TARGET_BASES_100X;
-
-    /**
-     * A measure of how undercovered <= 50% GC regions are relative to the mean. For each GC bin [0..50]
-     * we calculate a = % of target territory, and b = % of aligned reads aligned to these targets.
-     * AT DROPOUT is then abs(sum(a-b when a-b < 0)). E.g. if the value is 5% this implies that 5% of total
-     * reads that should have mapped to GC<=50% regions mapped elsewhere.
-     */
-    public double AT_DROPOUT;
-
-    /**
-     * A measure of how undercovered >= 50% GC regions are relative to the mean. For each GC bin [50..100]
-     * we calculate a = % of target territory, and b = % of aligned reads aligned to these targets.
-     * GC DROPOUT is then abs(sum(a-b when a-b < 0)). E.g. if the value is 5% this implies that 5% of total
-     * reads that should have mapped to GC>=50% regions mapped elsewhere.
-     */
-    public double GC_DROPOUT;
-
-    /** The theoretical HET SNP sensitivity. */
-    public double HET_SNP_SENSITIVITY;
-
-    /** The Phred Scaled Q Score of the theoretical HET SNP sensitivity. */
-    public double HET_SNP_Q;
+    public Histogram<Integer> getDepthHistogram() {
+        return unfilteredDepthHistogram;
+    }
 }

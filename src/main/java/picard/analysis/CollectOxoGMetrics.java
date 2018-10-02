@@ -35,41 +35,31 @@ import htsjdk.samtools.filter.SamRecordFilter;
 import htsjdk.samtools.metrics.MetricBase;
 import htsjdk.samtools.metrics.MetricsFile;
 import htsjdk.samtools.reference.ReferenceSequenceFileWalker;
-import htsjdk.samtools.util.CloserUtil;
-import htsjdk.samtools.util.IOUtil;
-import htsjdk.samtools.util.IntervalList;
-import htsjdk.samtools.util.ListMap;
-import htsjdk.samtools.util.Log;
-import htsjdk.samtools.util.SamLocusIterator;
-import htsjdk.samtools.util.SequenceUtil;
-import htsjdk.samtools.util.StringUtil;
+import htsjdk.samtools.util.*;
+import org.broadinstitute.barclay.argparser.Argument;
+import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
+import org.broadinstitute.barclay.help.DocumentedFeature;
 import picard.PicardException;
+import htsjdk.samtools.util.SequenceUtil;
 import picard.cmdline.CommandLineProgram;
-import picard.cmdline.CommandLineProgramProperties;
-import picard.cmdline.Option;
 import picard.cmdline.StandardOptionDefinitions;
-import picard.cmdline.programgroups.Metrics;
+import picard.cmdline.programgroups.DiagnosticsAndQCProgramGroup;
 import picard.util.DbSnpBitSetUtil;
 
 import java.io.File;
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
+import java.util.*;
+import java.lang.Math;
 
-import static htsjdk.samtools.util.CodeUtil.getOrElse;
-import static htsjdk.samtools.util.SequenceUtil.generateAllKmers;
-import static java.lang.Math.log10;
-import static picard.cmdline.StandardOptionDefinitions.MINIMUM_MAPPING_QUALITY_SHORT_NAME;
 
 /**
  * Class for trying to quantify the CpCG->CpCA error rate.
  */
 @CommandLineProgramProperties(
-        usage = CollectOxoGMetrics.USAGE_SUMMARY + CollectOxoGMetrics.USAGE_DETAILS,
-        usageShort = CollectOxoGMetrics.USAGE_SUMMARY,
-        programGroup = Metrics.class
+        summary = CollectOxoGMetrics.USAGE_SUMMARY + CollectOxoGMetrics.USAGE_DETAILS,
+        oneLineSummary = CollectOxoGMetrics.USAGE_SUMMARY,
+        programGroup = DiagnosticsAndQCProgramGroup.class
 )
+@DocumentedFeature
 public class CollectOxoGMetrics extends CommandLineProgram {
     static final String USAGE_SUMMARY = "Collect metrics to assess oxidative artifacts.";
     static final String USAGE_DETAILS = "This tool collects metrics quantifying the error rate resulting from oxidative artifacts. " +
@@ -94,55 +84,51 @@ public class CollectOxoGMetrics extends CommandLineProgram {
             "</pre>" +
             "" +
             "<hr />";
-    @Option(shortName = StandardOptionDefinitions.INPUT_SHORT_NAME,
+    @Argument(shortName = StandardOptionDefinitions.INPUT_SHORT_NAME,
             doc = "Input BAM file for analysis.")
     public File INPUT;
 
-    @Option(shortName = StandardOptionDefinitions.OUTPUT_SHORT_NAME,
+    @Argument(shortName = StandardOptionDefinitions.OUTPUT_SHORT_NAME,
             doc = "Location of output metrics file to write.")
     public File OUTPUT;
 
-    @Option(shortName = StandardOptionDefinitions.REFERENCE_SHORT_NAME,
-            doc = "Reference sequence to which BAM is aligned.")
-    public File REFERENCE_SEQUENCE;
-
-    @Option(doc = "An optional list of intervals to restrict analysis to.",
+    @Argument(doc = "An optional list of intervals to restrict analysis to.",
             optional = true)
     public File INTERVALS;
 
-    @Option(doc = "VCF format dbSNP file, used to exclude regions around known polymorphisms from analysis.",
+    @Argument(doc = "VCF format dbSNP file, used to exclude regions around known polymorphisms from analysis.",
             optional = true)
     public File DB_SNP;
 
-    @Option(shortName = "Q",
+    @Argument(shortName = "Q",
             doc = "The minimum base quality score for a base to be included in analysis.")
     public int MINIMUM_QUALITY_SCORE = 20;
 
-    @Option(shortName = MINIMUM_MAPPING_QUALITY_SHORT_NAME,
+    @Argument(shortName = StandardOptionDefinitions.MINIMUM_MAPPING_QUALITY_SHORT_NAME,
             doc = "The minimum mapping quality score for a base to be included in analysis.")
     public int MINIMUM_MAPPING_QUALITY = 30;
 
-    @Option(shortName = "MIN_INS",
+    @Argument(shortName = "MIN_INS",
             doc = "The minimum insert size for a read to be included in analysis. Set of 0 to allow unpaired reads.")
     public int MINIMUM_INSERT_SIZE = 60;
 
-    @Option(shortName = "MAX_INS",
+    @Argument(shortName = "MAX_INS",
             doc = "The maximum insert size for a read to be included in analysis. Set of 0 to allow unpaired reads.")
     public int MAXIMUM_INSERT_SIZE = 600;
 
-    @Option(shortName = "NON_PF", doc = "Whether or not to include non-PF reads.")
+    @Argument(shortName = "NON_PF", doc = "Whether or not to include non-PF reads.")
     public boolean INCLUDE_NON_PF_READS = true;
 
-    @Option(doc = "When available, use original quality scores for filtering.")
+    @Argument(doc = "When available, use original quality scores for filtering.")
     public boolean USE_OQ = true;
 
-    @Option(doc = "The number of context bases to include on each side of the assayed G/C base.")
+    @Argument(doc = "The number of context bases to include on each side of the assayed G/C base.")
     public int CONTEXT_SIZE = 1;
 
-    @Option(doc = "The optional set of sequence contexts to restrict analysis to. If not supplied all contexts are analyzed.")
-    public Set<String> CONTEXTS = new HashSet<String>();
+    @Argument(doc = "The optional set of sequence contexts to restrict analysis to. If not supplied all contexts are analyzed.", optional = true)
+    public Set<String> CONTEXTS = new HashSet<>();
 
-    @Option(doc = "For debugging purposes: stop after visiting this many sites with at least 1X coverage.")
+    @Argument(doc = "For debugging purposes: stop after visiting this many sites with at least 1X coverage.")
     public int STOP_AFTER = Integer.MAX_VALUE;
 
     private final Log log = Log.getInstance(CollectOxoGMetrics.class);
@@ -213,15 +199,15 @@ public class CollectOxoGMetrics extends CommandLineProgram {
         public double G_REF_OXO_Q;
     }
 
-    // Stock main method
-    public static void main(final String[] args) {
-        new CollectOxoGMetrics().instanceMainWithExit(args);
+    @Override
+    protected boolean requiresReference() {
+        return true;
     }
 
     @Override
     protected String[] customCommandLineValidation() {
         final int size = 1 + 2 * CONTEXT_SIZE;
-        final List<String> messages = new ArrayList<String>();
+        final List<String> messages = new ArrayList<>();
 
         for (final String ctx : CONTEXTS) {
             if (ctx.length() != size) {
@@ -250,21 +236,26 @@ public class CollectOxoGMetrics extends CommandLineProgram {
         final ReferenceSequenceFileWalker refWalker = new ReferenceSequenceFileWalker(REFERENCE_SEQUENCE);
         final SamReader in = SamReaderFactory.makeDefault().open(INPUT);
 
-        final Set<String> samples = new HashSet<String>();
-        final Set<String> libraries = new HashSet<String>();
+        if (!in.getFileHeader().getSequenceDictionary().isEmpty()) {
+            SequenceUtil.assertSequenceDictionariesEqual(in.getFileHeader().getSequenceDictionary(),
+                    refWalker.getSequenceDictionary());
+        }
+
+        final Set<String> samples = new HashSet<>();
+        final Set<String> libraries = new HashSet<>();
         
         if (in.getFileHeader().getReadGroups().isEmpty()) {
-        	throw new PicardException("This analysis requires a read group entry in the alignment file header");
+            throw new PicardException("This analysis requires a read group entry in the alignment file header");
         }
         
         for (final SAMReadGroupRecord rec : in.getFileHeader().getReadGroups()) {
-            samples.add(getOrElse(rec.getSample(), UNKNOWN_SAMPLE));
-            libraries.add(getOrElse(rec.getLibrary(), UNKNOWN_LIBRARY));
+            samples.add(Optional.ofNullable(rec.getSample()).orElse(UNKNOWN_SAMPLE));
+            libraries.add(Optional.ofNullable(rec.getLibrary()).orElse(UNKNOWN_LIBRARY));
         }
 
         // Setup the calculators
         final Set<String> contexts = CONTEXTS.isEmpty() ? makeContextStrings(CONTEXT_SIZE) : CONTEXTS;
-        final ListMap<String, Calculator> calculators = new ListMap<String, Calculator>();
+        final ListMap<String, Calculator> calculators = new ListMap<>();
         for (final String context : contexts) {
             for (final String library : libraries) {
                 calculators.add(context, new Calculator(library, context));
@@ -289,7 +280,7 @@ public class CollectOxoGMetrics extends CommandLineProgram {
         iterator.setMappingQualityScoreCutoff(MINIMUM_MAPPING_QUALITY);
         iterator.setIncludeNonPfReads(INCLUDE_NON_PF_READS);
 
-        final List<SamRecordFilter> filters = new ArrayList<SamRecordFilter>();
+        final List<SamRecordFilter> filters = new ArrayList<>();
         filters.add(new NotPrimaryAlignmentFilter());
         filters.add(new DuplicateReadFilter());
         if (MINIMUM_INSERT_SIZE > 0 || MAXIMUM_INSERT_SIZE > 0) {
@@ -310,7 +301,7 @@ public class CollectOxoGMetrics extends CommandLineProgram {
 
             // Skip sites at the end of chromosomes 
             final byte[] bases = refWalker.get(info.getSequenceIndex()).getBases();
-            if (pos < 3 || pos > bases.length - 3) continue;
+            if (pos <= CONTEXT_SIZE|| pos > bases.length - CONTEXT_SIZE) continue;
 
             // Skip non C-G bases
             final byte base = StringUtil.toUpperCase(bases[index]);
@@ -343,7 +334,7 @@ public class CollectOxoGMetrics extends CommandLineProgram {
         for (final List<Calculator> calcs : calculators.values()) {
             for (final Calculator calc : calcs) {
                 final CpcgMetrics m = calc.finish();
-                m.SAMPLE_ALIAS = StringUtil.join(",", new ArrayList<String>(samples));
+                m.SAMPLE_ALIAS = StringUtil.join(",", new ArrayList<>(samples));
                 file.addMetric(m);
             }
         }
@@ -354,9 +345,9 @@ public class CollectOxoGMetrics extends CommandLineProgram {
     }
 
     private Set<String> makeContextStrings(final int contextSize) {
-        final Set<String> contexts = new HashSet<String>();
+        final Set<String> contexts = new HashSet<>();
 
-        for (final byte[] kmer : generateAllKmers(2 * contextSize + 1)) {
+        for (final byte[] kmer : SequenceUtil.generateAllKmers(2 * contextSize + 1)) {
             if (kmer[contextSize] == 'C') {
                 contexts.add(StringUtil.bytesToString(kmer));
             }
@@ -442,7 +433,7 @@ public class CollectOxoGMetrics extends CommandLineProgram {
              * assume that controlA is half the story, and remove the other half from oxidatedA.
              */
             m.OXIDATION_ERROR_RATE = Math.max(m.ALT_OXO_BASES - m.ALT_NONOXO_BASES, 1) / (double) m.TOTAL_BASES;
-            m.OXIDATION_Q = -10 * log10(m.OXIDATION_ERROR_RATE);
+            m.OXIDATION_Q = -10 * Math.log10(m.OXIDATION_ERROR_RATE);
 
             /** Now look for things that have a reference base bias! */
             m.C_REF_REF_BASES = this.refCcontrolC + this.refCoxidatedC;
@@ -455,8 +446,8 @@ public class CollectOxoGMetrics extends CommandLineProgram {
 
             m.C_REF_OXO_ERROR_RATE = Math.max(cRefErrorRate - gRefErrorRate, 1e-10);
             m.G_REF_OXO_ERROR_RATE = Math.max(gRefErrorRate - cRefErrorRate, 1e-10);
-            m.C_REF_OXO_Q = -10 * log10(m.C_REF_OXO_ERROR_RATE);
-            m.G_REF_OXO_Q = -10 * log10(m.G_REF_OXO_ERROR_RATE);
+            m.C_REF_OXO_Q = -10 * Math.log10(m.C_REF_OXO_ERROR_RATE);
+            m.G_REF_OXO_Q = -10 * Math.log10(m.G_REF_OXO_ERROR_RATE);
 
             return m;
         }
@@ -482,7 +473,7 @@ public class CollectOxoGMetrics extends CommandLineProgram {
 
                 // Skip if below qual, or if library isn't a match
                 if (qual < MINIMUM_QUALITY_SCORE) continue;
-                if (!this.library.equals(getOrElse(samrec.getReadGroup().getLibrary(), UNKNOWN_LIBRARY))) continue;
+                if (!this.library.equals(Optional.ofNullable(samrec.getReadGroup().getLibrary()).orElse(UNKNOWN_LIBRARY))) continue;
 
                 // Get the read base, and get it in "as read" orientation
                 final byte base = rec.getReadBase();

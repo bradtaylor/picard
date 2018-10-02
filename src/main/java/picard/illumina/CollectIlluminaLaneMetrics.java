@@ -24,28 +24,36 @@
 
 package picard.illumina;
 
+import htsjdk.samtools.ValidationStringency;
 import htsjdk.samtools.metrics.MetricBase;
 import htsjdk.samtools.metrics.MetricsFile;
 import htsjdk.samtools.util.IOUtil;
 import htsjdk.samtools.util.Log;
+import org.broadinstitute.barclay.argparser.Argument;
+import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.w3c.dom.Document;
 import org.w3c.dom.NamedNodeMap;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
 import picard.PicardException;
 import picard.cmdline.CommandLineProgram;
-import picard.cmdline.CommandLineProgramProperties;
-import picard.cmdline.Option;
+import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
 import picard.cmdline.StandardOptionDefinitions;
-import picard.cmdline.programgroups.Illumina;
-import picard.illumina.parser.*;
-
-import java.io.File;
-import java.io.FileNotFoundException;
-import java.util.*;
-import java.util.stream.Collectors;
+import picard.cmdline.programgroups.BaseCallingProgramGroup;
+import picard.illumina.parser.ReadDescriptor;
+import picard.illumina.parser.ReadStructure;
+import picard.illumina.parser.ReadType;
+import picard.illumina.parser.Tile;
+import picard.illumina.parser.TileMetricsUtil;
 
 import javax.xml.parsers.DocumentBuilderFactory;
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * Command-line wrapper around {@link IlluminaLaneMetricsCollector}.
@@ -53,10 +61,11 @@ import javax.xml.parsers.DocumentBuilderFactory;
  */
 
 @CommandLineProgramProperties(
-        usage = CollectIlluminaLaneMetrics.USAGE_SUMMARY + CollectIlluminaLaneMetrics.USAGE_DETAILS,
-        usageShort = CollectIlluminaLaneMetrics.USAGE_SUMMARY,
-        programGroup = Illumina.class
+        summary = CollectIlluminaLaneMetrics.USAGE_SUMMARY + CollectIlluminaLaneMetrics.USAGE_DETAILS,
+        oneLineSummary = CollectIlluminaLaneMetrics.USAGE_SUMMARY,
+        programGroup = BaseCallingProgramGroup.class
 )
+@DocumentedFeature
 public class CollectIlluminaLaneMetrics extends CommandLineProgram {
     static final String USAGE_SUMMARY = "Collects Illumina lane metrics for the given BaseCalling analysis directory.  ";
     static final String USAGE_DETAILS = "This tool produces quality control metrics on cluster density for each lane of an Illumina flowcell." +
@@ -76,20 +85,23 @@ public class CollectIlluminaLaneMetrics extends CommandLineProgram {
             "for a complete description of the metrics produced by this tool.</p>" +
             "<hr />"
     ;
-    @Option(doc = "The Illumina run directory of the run for which the lane metrics are to be generated")
+    @Argument(doc = "The Illumina run directory of the run for which the lane metrics are to be generated")
     public File RUN_DIRECTORY;
 
-    @Option(doc = "The directory to which the output file will be written")
+    @Argument(doc = "The directory to which the output file will be written")
     public File OUTPUT_DIRECTORY;
 
-    @Option(doc = "The prefix to be prepended to the file name of the output file; an appropriate suffix will be applied", shortName = StandardOptionDefinitions.OUTPUT_SHORT_NAME)
+    @Argument(doc = "The prefix to be prepended to the file name of the output file; an appropriate suffix will be applied", shortName = StandardOptionDefinitions.OUTPUT_SHORT_NAME)
     public String OUTPUT_PREFIX;
 
-    @Option(doc = ReadStructure.PARAMETER_DOC + "\nIf not given, will use the RunInfo.xml in the run directory.", shortName = "RS", optional = true)
+    @Argument(doc = ReadStructure.PARAMETER_DOC + "\nIf not given, will use the RunInfo.xml in the run directory.", shortName = "RS", optional = true)
     public ReadStructure READ_STRUCTURE;
 
-    @Option(shortName = "EXT", doc="Append the given file extension to all metric file names (ex. OUTPUT.illumina_lane_metrics.EXT). None if null", optional=true)
+    @Argument(shortName = "EXT", doc="Append the given file extension to all metric file names (ex. OUTPUT.illumina_lane_metrics.EXT). None if null", optional=true)
     public String FILE_EXTENSION = null;
+
+    @Argument(doc = "Boolean the determines if this run is a NovaSeq run or not. (NovaSeq tile metrics files are in cycle 25 directory.", optional = true)
+    public boolean IS_NOVASEQ = false;
 
     @Override
     protected int doWork() {
@@ -118,7 +130,9 @@ public class CollectIlluminaLaneMetrics extends CommandLineProgram {
             }
         }
 
-        IlluminaLaneMetricsCollector.collectLaneMetrics(RUN_DIRECTORY, OUTPUT_DIRECTORY, OUTPUT_PREFIX, laneMetricsFile, phasingMetricsFile, READ_STRUCTURE, FILE_EXTENSION == null ? "" : FILE_EXTENSION);
+        IlluminaLaneMetricsCollector.collectLaneMetrics(RUN_DIRECTORY, OUTPUT_DIRECTORY, OUTPUT_PREFIX,
+                laneMetricsFile, phasingMetricsFile,
+                READ_STRUCTURE, FILE_EXTENSION == null ? "" : FILE_EXTENSION, VALIDATION_STRINGENCY, IS_NOVASEQ);
         return 0;
     }
 
@@ -134,32 +148,50 @@ public class CollectIlluminaLaneMetrics extends CommandLineProgram {
         private final static Log LOG = Log.getInstance(IlluminaLaneMetricsCollector.class);
 
         /** Returns a partitioned collection of lane number to Tile objects from the provided basecall directory. */
-        public static Map<Integer, ? extends Collection<Tile>> readLaneTiles(final File illuminaRunDirectory, final ReadStructure readStructure) {
+        public static Map<Integer, ? extends Collection<Tile>> readLaneTiles(final File illuminaRunDirectory,
+                                                                             final ReadStructure readStructure,
+                                                                             final ValidationStringency validationStringency,
+                                                                             final boolean isNovaSeq) {
             final Collection<Tile> tiles;
             try {
-                tiles = TileMetricsUtil.parseTileMetrics(TileMetricsUtil.renderTileMetricsFileFromBasecallingDirectory(illuminaRunDirectory), readStructure);
+                final List<File> tileMetricsOutFiles = TileMetricsUtil.findTileMetricsFiles(illuminaRunDirectory, readStructure.totalCycles, isNovaSeq);
+                if (isNovaSeq) {
+                    tiles = TileMetricsUtil.parseClusterRecordsFromTileMetricsV3(
+                            tileMetricsOutFiles,
+                            TileMetricsUtil.renderPhasingMetricsFilesFromBasecallingDirectory(illuminaRunDirectory),
+                            readStructure
+                    );
+                } else {
+                    tiles = TileMetricsUtil.parseTileMetrics(
+                            tileMetricsOutFiles.get(0),
+                            readStructure,
+                            validationStringency
+                    );
+                }
             } catch (final FileNotFoundException e) {
                 throw new PicardException("Unable to open laneMetrics file.", e);
             }
 
-            return tiles.stream().collect(Collectors.groupingBy(Tile::getLaneNumber));
+            return tiles.stream().filter(tile -> tile.getLaneNumber() > 0).collect(Collectors.groupingBy(Tile::getLaneNumber));
         }
 
         /** Parses the tile data from the basecall directory and writes to both the lane and phasing metrics files */
         public static void collectLaneMetrics(final File runDirectory, final File outputDirectory, final String outputPrefix,
                                               final MetricsFile<MetricBase, Comparable<?>> laneMetricsFile,
                                               final MetricsFile<MetricBase, Comparable<?>> phasingMetricsFile,
-                                              final ReadStructure readStructure, final String fileExtension) {
-            final Map<Integer, ? extends Collection<Tile>> laneTiles = readLaneTiles(runDirectory, readStructure);
+                                              final ReadStructure readStructure, final String fileExtension,
+                                              final ValidationStringency validationStringency,
+                                              final boolean isNovaSeq) {
+            final Map<Integer, ? extends Collection<Tile>> laneTiles = readLaneTiles(runDirectory, readStructure, validationStringency, isNovaSeq);
             writeLaneMetrics(laneTiles, outputDirectory, outputPrefix, laneMetricsFile, fileExtension);
-            writePhasingMetrics(laneTiles, outputDirectory, outputPrefix, phasingMetricsFile, fileExtension);
+            writePhasingMetrics(laneTiles, outputDirectory, outputPrefix, phasingMetricsFile, fileExtension, isNovaSeq);
         }
 
         public static File writePhasingMetrics(final Map<Integer, ? extends Collection<Tile>> laneTiles, final File outputDirectory,
                                                final String outputPrefix, final MetricsFile<MetricBase, Comparable<?>> phasingMetricsFile,
-                                               final String fileExtension) {
-            laneTiles.entrySet().stream().forEach(entry -> IlluminaPhasingMetrics.getPhasingMetricsForTiles(entry.getKey().longValue(),
-                    entry.getValue()).forEach(phasingMetricsFile::addMetric));
+                                               final String fileExtension, final boolean isNovaSeq) {
+            laneTiles.forEach((key, value) -> IlluminaPhasingMetrics.getPhasingMetricsForTiles(key.longValue(),
+                    value, !isNovaSeq).forEach(phasingMetricsFile::addMetric));
 
             return writeMetrics(phasingMetricsFile, outputDirectory, outputPrefix, IlluminaPhasingMetrics.getExtension() + fileExtension);
         }
@@ -167,7 +199,7 @@ public class CollectIlluminaLaneMetrics extends CommandLineProgram {
         public static File writeLaneMetrics(final Map<Integer, ? extends Collection<Tile>> laneTiles, final File outputDirectory,
                                             final String outputPrefix, final MetricsFile<MetricBase, Comparable<?>> laneMetricsFile,
                                             final String fileExtension) {
-            laneTiles.entrySet().stream().forEach(entry -> {
+            laneTiles.entrySet().forEach(entry -> {
                 final IlluminaLaneMetrics laneMetric = new IlluminaLaneMetrics();
                 laneMetric.LANE = entry.getKey().longValue();
                 laneMetric.CLUSTER_DENSITY = calculateLaneDensityFromTiles(entry.getValue());
@@ -189,10 +221,10 @@ public class CollectIlluminaLaneMetrics extends CommandLineProgram {
             double area = 0;
             double clusters = 0;
             for (final Tile tile : tiles) {
-                area += (tile.getClusterCount() / tile.getClusterDensity());
+                if (tile.getClusterDensity() > 0) area += (tile.getClusterCount() / tile.getClusterDensity());
                 clusters += tile.getClusterCount();
             }
-            return clusters / area;
+            return (area > 0) ? clusters / area : 0.0;
         }
     }
 }

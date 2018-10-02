@@ -2,11 +2,12 @@ package picard.util;
 
 import htsjdk.samtools.util.Log;
 import htsjdk.samtools.util.RuntimeIOException;
+import org.broadinstitute.barclay.help.DocumentedFeature;
 import picard.PicardException;
 import picard.cmdline.CommandLineProgram;
-import picard.cmdline.CommandLineProgramProperties;
-import picard.cmdline.Option;
-import picard.cmdline.programgroups.None;
+import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
+import org.broadinstitute.barclay.argparser.Argument;
+import picard.cmdline.programgroups.OtherProgramGroup;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -15,33 +16,53 @@ import java.text.DecimalFormat;
 import java.text.NumberFormat;
 
 /**
- * A program that is designed to act as a large memory buffer between processes that are
- * connected with unix pipes where one or more processes either produce or consume their
+ * <h3>Summary</h3>
+ * Acts as a large memory buffer between processes that are
+ * connected with unix pipes for the case that one or more processes produces or consumes their
  * input or output in bursts.  By inserting a large memory buffer between such processes
- * each process can run at full speed and the bursts can be smoothed out.
+ * each process can run at full speed and the bursts can be smoothed out by the memory buffer.
  *
- * For example:
- *   java -jar SamToFastq.jar F=my.fastq INTERLEAVE=true | java -jar FifoBuffer | bwa mem -t 8 ...
+ * <h3>Example</h3>
+ * <pre>
+ *   java -jar SamToFastq.jar \
+ *      F=my.fastq \
+ *      INTERLEAVE=true |
+ *   java -jar FifoBuffer |
+ *   bwa mem -t 8 -Y reference.fasta \dev\stdin output.bam
+ *  </pre>
  *
  * @author Tim Fennell
  */
 @CommandLineProgramProperties(
-        usage = "Provides a large, configurable, FIFO buffer that can be used to buffer input and output " +
-                "streams between programs with a buffer size that is larger than that offered by native unix FIFOs (usually 64k).",
-        usageShort = "FIFO buffer used to buffer input and output streams with a customizable buffer size ",
-        programGroup = None.class
+        oneLineSummary = "Provides a large, FIFO buffer that can be used to buffer input and output " +
+                "streams between programs.",
+        summary =
+                "Acts as a large memory buffer between processes that are " +
+                "connected with unix pipes for the case that one or more processes produces or consumes their " +
+                "input or output in bursts.  By inserting a large memory buffer between such processes " +
+                "each process can run at full speed and the bursts can be smoothed out by the memory buffer.\n " +
+                "\n" +
+                "<h3>Example</h3>\n" +
+                "  java -jar SamToFastq.jar \\\n" +
+                "     F=my.fastq \\\n" +
+                "     INTERLEAVE=true |\n" +
+                "  java -jar FifoBuffer |\n" +
+                "  bwa mem -t 8 \\dev\\stdin output.bam\n",
+        programGroup = OtherProgramGroup.class
+
 )
+@DocumentedFeature
 public class FifoBuffer extends CommandLineProgram {
-    @Option(doc="The size of the memory buffer in bytes.")
+    @Argument(doc="The size of the memory buffer in bytes.")
     public int BUFFER_SIZE = 512 * 1024 * 1024;
 
-    @Option(doc="The size, in bytes, to read/write atomically to the input and output streams.")
+    @Argument(doc="The size, in bytes, to read/write atomically to the input and output streams.")
     public int IO_SIZE = 64 * 1024; // 64k == most common unix pipe buffer size
 
-    @Option(doc="How frequently, in seconds, to report debugging statistics. Set to zero for never.")
+    @Argument(doc="How frequently, in seconds, to report debugging statistics. Set to zero for never.")
     public int DEBUG_FREQUENCY = 0;
 
-    @Option(doc="Name to use for Fifo in debugging statements.", optional=true)
+    @Argument(doc="Name to use for Fifo in debugging statements.", optional=true)
     public String NAME;
 
     // Standard log object

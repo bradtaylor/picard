@@ -43,11 +43,12 @@ import htsjdk.variant.vcf.VCFHeaderLine;
 import htsjdk.variant.vcf.VCFHeaderLineCount;
 import htsjdk.variant.vcf.VCFHeaderLineType;
 import htsjdk.variant.vcf.VCFInfoHeaderLine;
+import org.broadinstitute.barclay.argparser.Argument;
+import org.broadinstitute.barclay.help.DocumentedFeature;
 import picard.cmdline.CommandLineProgram;
-import picard.cmdline.CommandLineProgramProperties;
-import picard.cmdline.Option;
+import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
 import picard.cmdline.StandardOptionDefinitions;
-import picard.cmdline.programgroups.VcfOrBcf;
+import picard.cmdline.programgroups.VariantEvaluationProgramGroup;
 import picard.pedigree.PedFile;
 import picard.vcf.processor.VariantProcessor;
 
@@ -64,79 +65,121 @@ import java.util.TreeSet;
 import static htsjdk.variant.variantcontext.writer.Options.INDEX_ON_THE_FLY;
 
 /**
- * Finds mendelian violations of all types within a VCF.  Takes in VCF or BCF and a pedigree file and looks
- * for high confidence calls where the genotype of the offspring is incompatible with the genotypes of the
- * parents.  Key features:
- * 1) Checks for regular MVs in diploid regions and invalid transmissions in haploid regions
- * 2) Outputs metrics about the different kinds of MVs found
- * 3) Can output a per-trio VCF with violations; INFO field will contain a MV= attribute with the type of violation
+ * <h3>Summary</h3>
+ * Finds mendelian violations (MVs) of all types within a VCF.
+ * <h3>Detail</h3>
+ * Takes in VCF or BCF and a pedigree file and looks for high confidence calls where the genotype of the offspring
+ * is incompatible with the genotypes of the parents.  <br/>
+ * Key features:
+ * <ol>
+ * <li>
+ * Checks for regular MVs in diploid regions and invalid transmissions in haploid regions (using the declared gender
+ * of the offspring in the pedigree file to determine how to deal with the male and female chromosomes.)
+ * </li>
+ * <li>
+ * Outputs metrics about the different kinds of MVs found
+ * </li>
+ * <li>
+ * Can output a per-trio VCF with violations; INFO field will indicate the type of violation in the MV field
+ * </li>
+ * </ol>
  *
- * This CLP ignores variants that are:
- * - Not SNPs
- * - Filtered
- * - Multiallelic
- * - Monomorphic
- * - Within the SKIP_CHROMS contigs
+ * <h3>Example</h3>
+ * <pre>
+ *     java -jar picard.jar FindMendelianViolations\\
+ *          I=input.vcf \\
+ *          TRIO=pedigree.fam \\
+ *          O=report.mendelian_violation_metrics \\
+ *          MIN_DP=20
+ * </pre>
+ * <h3>Caveates</h3>
+ * <h4>Assumptions</h4>
+ * The tool assumes the existence of FORMAT fields AD, DP, GT, GQ, and PL.
+ * <h4>Ignored Variants</h4>
+ * This tool ignores variants that are:
+ * <ul>
+ * <li>Not SNPs</li>
+ * <li>Filtered</li>
+ * <li>Multiallelic (i.e., trio has more than 2 alleles)</li>
+ * <li>Within the {@link #SKIP_CHROMS} contigs</li>
+ * </ul>
+ * <h4>PseudoAutosomal Region</h4>
+ * This tool assumes that variants in the PAR will be mapped onto the female chromosome, and will treat variants in
+ * that region as as autosomal. The mapping to female requires that the PAR in the male chromosome be masked so that
+ * the aligner maps reads to single contig. This is normally done for the public releases of the human reference.
+ * The tool has default values for PAR that are sensible for humans on either build b37 or hg38.
  *
  * @author Tim Fennell
  */
 @CommandLineProgramProperties(
-        usage = "Finds mendelian violations of all types within a VCF. " +
-           "Takes in VCF or BCF and a pedigree file and looks for high confidence calls " +
-           "where the genotype of the offspring is incompatible with the genotypes of the parents. " +
-                "Assumes the existence of format fields AD, DP, GT, GQ, and PL fields. " +
-                "\n" +
-                "Take note that the implementation assumes that reads from the PAR will be mapped to the female chromosome" +
-                "rather than the male. This requires that the PAR in the male chromosome be masked so that the aligner " +
-                "has a single coting to map to. This is normally done for the public releases of the human reference."+
-                "\n" +
-                "Usage example: java -jar picard.jar FindMendelianViolations I=input.vcf \\\n" +
-                "                 TRIO=family.ped \\\n" +
-                "                 OUTPUT=mendelian.txt \\\n" +
-                "                 MIN_DP=20 \n" +
-                "\n"
-        ,
-        usageShort = "Finds mendelian violations of all types within a VCF",
-        programGroup = VcfOrBcf.class
-)
+        summary = "Takes in VCF or BCF and a pedigree file and looks for high confidence calls where the genotype of the offspring " +
+                "is incompatible with the genotypes of the parents.  \n" +
+                "Key features:\n" +
+                "- Checks for regular MVs in diploid regions and invalid transmissions in haploid regions (using the declared gender " +
+                "of the offspring in the pedigree file to determine how to deal with the male and female chromosomes.)\n" +
+                "- Outputs metrics about the different kinds of MVs found.\n" +
+                "- Can output a per-trio VCF with violations; INFO field will indicate the type of violation in the MV field\n" +
+                "<h3>Example</h3>\n" +
+                "    java -jar picard.jar FindMendelianViolations\\\n" +
+                "         I=input.vcf \\\n" +
+                "         TRIO=pedigree.fam \\\n" +
+                "         O=report.mendelian_violation_metrics \\\n" +
+                "         MIN_DP=20\n" +
+                "<h3>Caveates</h3>\n" +
+                "<h4>Assumptions</h4>\n" +
+                "The tool assumes the existence of FORMAT fields AD, DP, GT, GQ, and PL. \n" +
+                "<h4>Ignored Variants</h4>\n" +
+                "This tool ignores variants that are:\n" +
+                "- Not SNPs\n" +
+                "- Filtered\n" +
+                "- Multiallelic (i.e., trio has more than 2 alleles)\n" +
+                "- Within the SKIP_CHROMS contigs\n" +
+                "<h4>PseudoAutosomal Region</h4>\n" +
+                "This tool assumes that variants in the PAR will be mapped onto the female chromosome, and will treat variants in " +
+                "that region as as autosomal. The mapping to female requires that the PAR in the male chromosome be masked so that " +
+                "the aligner maps reads to single contig. This is normally done for the public releases of the human reference. " +
+                "The tool has default values for PAR that are sensible for humans on either build b37 or hg38.\n",
+        oneLineSummary = "Finds mendelian violations of all types within a VCF",
+        programGroup = VariantEvaluationProgramGroup.class)
+@DocumentedFeature
 public class FindMendelianViolations extends CommandLineProgram {
-    @Option(shortName = StandardOptionDefinitions.INPUT_SHORT_NAME, doc = "Input VCF or BCF with genotypes.")
+    @Argument(shortName = StandardOptionDefinitions.INPUT_SHORT_NAME, doc = "Input VCF or BCF with genotypes.")
     public File INPUT;
 
-    @Option(shortName = "PED", doc = "File of Trio information in PED format (with no genotype columns).")
+    @Argument(shortName = "PED", doc = "File of Trio information in PED format (with no genotype columns).")
     public File TRIOS;
 
-    @Option(shortName = StandardOptionDefinitions.OUTPUT_SHORT_NAME, doc = "Output metrics file.")
+    @Argument(shortName = StandardOptionDefinitions.OUTPUT_SHORT_NAME, doc = "Output metrics file.")
     public File OUTPUT;
 
-    @Option(shortName = "GQ", doc = "Minimum genotyping quality (or non-ref likelihood) to perform tests.")
+    @Argument(shortName = "GQ", doc = "Minimum genotyping quality (or non-ref likelihood) to perform tests.")
     public int MIN_GQ = 30;
 
-    @Option(shortName = "DP", doc="Minimum depth in each sample to consider possible mendelian violations.")
+    @Argument(shortName = "DP", doc="Minimum depth in each sample to consider possible mendelian violations.")
     public int MIN_DP = 0;
 
-    @Option(shortName = "MINHET", doc = "Minimum allele balance at sites that are heterozygous in the offspring.")
+    @Argument(shortName = "MINHET", doc = "Minimum allele balance at sites that are heterozygous in the offspring.")
     public double MIN_HET_FRACTION = 0.3;
 
-    @Option(optional = true, doc = "If provided, output per-family VCFs of mendelian violations into this directory.")
+    @Argument(optional = true, doc = "If provided, output per-family VCFs of mendelian violations into this directory.")
     public File VCF_DIR;
 
-    @Option(doc = "List of chromosome names to skip entirely.")
+    @Argument(doc = "List of chromosome names to skip entirely.")
     public Set<String> SKIP_CHROMS = CollectionUtil.makeSet("MT", "chrM");
 
-    @Option(doc = "List of possible names for male sex chromosome(s)")
+    @Argument(doc = "List of possible names for male sex chromosome(s)")
     public Set<String> MALE_CHROMS = CollectionUtil.makeSet("Y", "chrY");
 
-    @Option(doc = "List of possible names for female sex chromosome(s)")
+    @Argument(doc = "List of possible names for female sex chromosome(s)")
     public Set<String> FEMALE_CHROMS = CollectionUtil.makeSet("X", "chrX");
 
-    @Option(doc = "List of chr:start-end for pseudo-autosomal regions on the female sex chromosome. Defaults to HG19/b37 & HG38 coordinates.")
+    @Argument(doc = "List of chr:start-end for pseudo-autosomal regions on the female sex chromosome. Defaults to HG19/b37 & HG38 coordinates.")
     public Set<String> PSEUDO_AUTOSOMAL_REGIONS = CollectionUtil.makeSet("X:10001-2649520", "X:59034050-59373566", "chrX:10000-2781479", "chrX:155701382-156030895");
 
-    @Option(doc = "The number of threads that will be used to collect the metrics. ")
+    @Argument(doc = "The number of threads that will be used to collect the metrics. ")
     public int THREAD_COUNT = 1;
 
-    @Option(doc = "If true then fields need to be delimited by a single tab. If false the delimiter is one or more whitespace characters." +
+    @Argument(doc = "If true then fields need to be delimited by a single tab. If false the delimiter is one or more whitespace characters." +
             " Note that tab mode does not strictly follow the PED spec")
     public boolean TAB_MODE = false;
 
@@ -234,7 +277,7 @@ public class FindMendelianViolations extends CommandLineProgram {
             headerLines.add(new VCFInfoHeaderLine(MendelianViolationDetector.ORIGINAL_AN, 1, VCFHeaderLineType.Integer, "Original AN"));
 
             for (final PedFile.PedTrio trio : pedFile.get().values()) {
-                final File outputFile = new File(VCF_DIR, IOUtil.makeFileNameSafe(trio.getFamilyId() + ".vcf"));
+                final File outputFile = new File(VCF_DIR, IOUtil.makeFileNameSafe(trio.getFamilyId() + IOUtil.VCF_FILE_EXTENSION));
                 LOG.info(String.format("Writing %s violation VCF to %s", trio.getFamilyId(), outputFile.getAbsolutePath()));
 
                 final VariantContextWriter out = new VariantContextWriterBuilder()

@@ -90,6 +90,7 @@ public abstract class AbstractAlignmentMerger {
     private boolean addMateCigar = false;
     private boolean unmapContaminantReads = false;
     private UnmappingReadStrategy unmappingReadsStrategy = UnmappingReadStrategy.DO_NOT_CHANGE;
+    private boolean addPGTagToReads = true;
 
 
     private final SamRecordFilter alignmentFilter = new SamRecordFilter() {
@@ -123,14 +124,22 @@ public abstract class AbstractAlignmentMerger {
 
         /** Adds a record to the sink. */
         void add(final SAMRecord rec) {
-            if (writer != null) writer.addAlignment(rec);
-            if (sorter != null) sorter.add(rec);
+            if (writer != null) {
+                writer.addAlignment(rec);
+            }
+            if (sorter != null) {
+                sorter.add(rec);
+            }
         }
 
         /** Closes the underlying resource. */
         void close() {
-            if (this.writer != null) this.writer.close();
-            if (this.sorter != null) this.sorter.doneAdding();
+            if (this.writer != null) {
+                this.writer.close();
+            }
+            if (this.sorter != null) {
+                this.sorter.doneAdding();
+            }
         }
     }
 
@@ -314,6 +323,14 @@ public abstract class AbstractAlignmentMerger {
     }
 
     /**
+     * Set addPGTagToReads. If true, the PG will be added to reads when applicable. If false, the PG tag will not be added.
+     * Default is true
+     */
+    public void setAddPGTagToReads(final boolean addPGTagToReads) {
+        this.addPGTagToReads = addPGTagToReads;
+    }
+
+    /**
      * Do this unconditionally, not just for aligned records, for two reasons:
      * - An unaligned read has been processed by the aligner, so it is more truthful.
      * - When chaining additional PG records, having all the records in the output file refer to the same PG
@@ -321,7 +338,7 @@ public abstract class AbstractAlignmentMerger {
      * and a separate chain for the unmapped reads.
      */
     private void maybeSetPgTag(final SAMRecord rec) {
-        if (this.programRecord != null) {
+        if (this.programRecord != null && addPGTagToReads) {
             rec.setAttribute(ReservedTagConstants.PROGRAM_GROUP_ID, this.programRecord.getProgramGroupId());
         }
     }
@@ -365,7 +382,7 @@ public abstract class AbstractAlignmentMerger {
         if (this.sortOrder == SortOrder.coordinate) {
             final SortingCollection<SAMRecord> sorted1 = SortingCollection.newInstance(
                     SAMRecord.class, new BAMRecordCodec(header), new SAMRecordCoordinateComparator(),
-                    MAX_RECORDS_IN_RAM);
+                    this.maxRecordsInRam);
             sink = new Sink(sorted1);
         }
         else { // catches queryname and unsorted
@@ -446,13 +463,19 @@ public abstract class AbstractAlignmentMerger {
                         // this avoids the scenario of having multiple unmapped reads with the same name & pair flags
                         if (!firstToWrite.getReadUnmappedFlag() || isPrimaryAlignment) {
                             addIfNotFiltered(sink, firstToWrite);
-                            if (firstToWrite.getReadUnmappedFlag()) ++unmapped;
-                            else ++aligned;
+                            if (firstToWrite.getReadUnmappedFlag()) {
+                                ++unmapped;
+                            } else {
+                                ++aligned;
+                            }
                         }
                         if (!secondToWrite.getReadUnmappedFlag() || isPrimaryAlignment) {
                             addIfNotFiltered(sink, secondToWrite);
-                            if (!secondToWrite.getReadUnmappedFlag()) ++aligned;
-                            else ++unmapped;
+                            if (!secondToWrite.getReadUnmappedFlag()) {
+                                ++aligned;
+                            } else {
+                                ++unmapped;
+                            }
                         }
                     }
 
@@ -470,7 +493,9 @@ public abstract class AbstractAlignmentMerger {
                             if (!out.getReadUnmappedFlag()) {
                                 addIfNotFiltered(sink, out);
                                 ++aligned;
-                            } else ++unmapped;
+                            } else {
+                                ++unmapped;
+                            }
                         }
                     }
                 } else {
@@ -480,9 +505,14 @@ public abstract class AbstractAlignmentMerger {
                         transferAlignmentInfoToFragment(recToWrite, nextAligned.getFragment(i), unmapDueToContaminant, clone);
                         // Only write unmapped read if it was originally the primary.
                         // this avoids the scenario of having multiple unmapped reads with the same name & pair flags
-                        if (!recToWrite.getReadUnmappedFlag() || isPrimary) addIfNotFiltered(sink, recToWrite);
-                        if (recToWrite.getReadUnmappedFlag()) ++unmapped;
-                        else ++aligned;
+                        if (!recToWrite.getReadUnmappedFlag() || isPrimary) {
+                            addIfNotFiltered(sink, recToWrite);
+                        }
+                        if (recToWrite.getReadUnmappedFlag()) {
+                            ++unmapped;
+                        } else {
+                            ++aligned;
+                        }
                     }
                     // Take all of the supplemental reads which had been stashed and add them (as appropriate) to sorted
                     for (final SAMRecord supplementalRec : nextAligned.getSupplementalFirstOfPairOrFragment()) {
@@ -492,7 +522,9 @@ public abstract class AbstractAlignmentMerger {
                         if (!recToWrite.getReadUnmappedFlag()) {
                             addIfNotFiltered(sink, recToWrite);
                             ++aligned;
-                        } else ++unmapped;
+                        } else {
+                            ++unmapped;
+                        }
                     }
                 }
                 nextAligned = nextAligned();
@@ -553,13 +585,26 @@ public abstract class AbstractAlignmentMerger {
      * No return value, modifies the provided record.
      */
     public static void fixNmMdAndUq(final SAMRecord record, final ReferenceSequenceFileWalker refSeqWalker, final boolean isBisulfiteSequence) {
-        final byte[] referenceBases = refSeqWalker.get(refSeqWalker.getSequenceDictionary().getSequenceIndex(record.getReferenceName())).getBases();
+        final byte[] referenceBases = refSeqWalker.get(record.getReferenceIndex()).getBases();
         // only recalculate NM if it isn't bisulfite, since it needs to be treated specially below
         SequenceUtil.calculateMdAndNmTags(record, referenceBases, true, !isBisulfiteSequence);
         if (isBisulfiteSequence) {  // recalculate the NM tag for bisulfite data
             record.setAttribute(SAMTag.NM.name(), SequenceUtil.calculateSamNmTag(record, referenceBases, 0, isBisulfiteSequence));
         }
+        fixUq(record, refSeqWalker, isBisulfiteSequence);
+    }
+
+    /** Calculates and sets UQ tag from the record and the reference
+     *
+     * @param record the record to be fixed
+     * @param refSeqWalker a ReferenceSequenceWalker that will be used to traverse the reference
+     * @param isBisulfiteSequence a flag indicating whether the sequence came from bisulfite-sequencing.
+     *
+     * No return value, modifies the provided record.
+     */
+    public static void fixUq(final SAMRecord record, final ReferenceSequenceFileWalker refSeqWalker, final boolean isBisulfiteSequence) {
         if (record.getBaseQualities() != SAMRecord.NULL_QUALS) {
+            final byte[] referenceBases = refSeqWalker.get(record.getReferenceIndex()).getBases();
             record.setAttribute(SAMTag.UQ.name(), SequenceUtil.sumQualitiesOfMismatches(record, referenceBases, 0, isBisulfiteSequence));
         }
     }
@@ -682,9 +727,15 @@ public abstract class AbstractAlignmentMerger {
     private void transferAlignmentInfoToPairedRead(final SAMRecord firstUnaligned, final SAMRecord secondUnaligned,
                                                    final SAMRecord firstAligned, final SAMRecord secondAligned,
                                                    final boolean isContaminant, final boolean needsSafeReverseComplement) {
-        if (firstAligned != null) transferAlignmentInfoToFragment(firstUnaligned, firstAligned, isContaminant, needsSafeReverseComplement);
-        if (secondAligned != null) transferAlignmentInfoToFragment(secondUnaligned, secondAligned, isContaminant, needsSafeReverseComplement);
-        if (isClipOverlappingReads()) clipForOverlappingReads(firstUnaligned, secondUnaligned);
+        if (firstAligned != null) {
+            transferAlignmentInfoToFragment(firstUnaligned, firstAligned, isContaminant, needsSafeReverseComplement);
+        }
+        if (secondAligned != null) {
+            transferAlignmentInfoToFragment(secondUnaligned, secondAligned, isContaminant, needsSafeReverseComplement);
+        }
+        if (isClipOverlappingReads()) {
+            clipForOverlappingReads(firstUnaligned, secondUnaligned);
+        }
         SamPairUtil.setMateInfo(secondUnaligned, firstUnaligned, addMateCigar);
         if (!keepAlignerProperPairFlags) {
             SamPairUtil.setProperPairFlags(secondUnaligned, firstUnaligned, expectedOrientations);
@@ -733,8 +784,12 @@ public abstract class AbstractAlignmentMerger {
         int clipped = 0;
         while (iterator.hasNext()) {
             final CigarElement elem = iterator.next();
-            if (elem.getOperator() != CigarOperator.SOFT_CLIP && elem.getOperator() != CigarOperator.HARD_CLIP) break;
-            if (elem.getOperator() == CigarOperator.SOFT_CLIP) clipped = elem.getLength();
+            if (elem.getOperator() != CigarOperator.SOFT_CLIP && elem.getOperator() != CigarOperator.HARD_CLIP) {
+                break;
+            }
+            if (elem.getOperator() == CigarOperator.SOFT_CLIP) {
+                clipped = elem.getLength();
+            }
         }
 
         return clipped;
@@ -821,7 +876,9 @@ public abstract class AbstractAlignmentMerger {
                     rec.getAlignmentEnd(),
                     rec.getReadLength(),
                     rec.getCigar());
-            if (null != readCigar) rec.setCigar(readCigar);
+            if (null != readCigar) {
+                rec.setCigar(readCigar);
+            }
         }
 
         // If the read's mate maps off the end of the alignment, clip it
@@ -833,7 +890,9 @@ public abstract class AbstractAlignmentMerger {
                     SAMUtils.getMateAlignmentEnd(rec), // NB: this could be computed without another call to getMateCigar
                     mateCigar.getReadLength(),
                     mateCigar);
-            if (null != mateCigar) rec.setAttribute(SAMTag.MC.name(), mateCigar.toString());
+            if (null != mateCigar) {
+                rec.setAttribute(SAMTag.MC.name(), mateCigar.toString());
+            }
         }
     }
 
@@ -875,10 +934,14 @@ public abstract class AbstractAlignmentMerger {
 
         // All tags that start with a lower-case letter are user defined and should not be overridden by aligner
         // unless explicitly specified in attributesToRetain.
-        if (Character.isLowerCase(firstCharOfTag)) return true;
+        if (Character.isLowerCase(firstCharOfTag)) {
+            return true;
+        }
 
         for (final char c : RESERVED_ATTRIBUTE_STARTS) {
-            if (firstCharOfTag == c) return true;
+            if (firstCharOfTag == c) {
+                return true;
+            }
         }
         return false;
     }

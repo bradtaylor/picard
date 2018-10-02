@@ -26,22 +26,13 @@ package picard.illumina.parser;
 import htsjdk.samtools.util.CloserUtil;
 import htsjdk.samtools.util.IOUtil;
 import picard.PicardException;
-import picard.illumina.parser.fakers.BarcodeFileFaker;
-import picard.illumina.parser.fakers.BclFileFaker;
-import picard.illumina.parser.fakers.ClocsFileFaker;
-import picard.illumina.parser.fakers.FilterFileFaker;
-import picard.illumina.parser.fakers.LocsFileFaker;
-import picard.illumina.parser.fakers.PosFileFaker;
+import picard.illumina.parser.fakers.*;
 import picard.illumina.parser.readers.TileMetricsOutReader;
 
 import java.io.File;
-import java.util.ArrayList;
-import java.util.EnumMap;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.util.TreeSet;
+import java.util.*;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
  * General utils for dealing with IlluminaFiles as well as utils for specific, support formats.
@@ -76,14 +67,14 @@ public class IlluminaFileUtil {
     private final int lane;
 
     private final File tileMetricsOut;
-    private final Map<SupportedIlluminaFormat, ParameterizedFileUtil> utils = new EnumMap<SupportedIlluminaFormat, ParameterizedFileUtil>(SupportedIlluminaFormat.class);
+    private final Map<SupportedIlluminaFormat, ParameterizedFileUtil> utils = new EnumMap<>(SupportedIlluminaFormat.class);
 
     public IlluminaFileUtil(final File basecallDir, final int lane) {
-		this(basecallDir, null, lane);
-	}
+        this(basecallDir, null, lane);
+    }
 
 
-	public IlluminaFileUtil(final File basecallDir, File barcodeDir, final int lane) {
+    public IlluminaFileUtil(final File basecallDir, final File barcodeDir, final int lane) {
         this.lane = lane;
         this.basecallDir = basecallDir;
         this.barcodeDir = barcodeDir;
@@ -126,7 +117,7 @@ public class IlluminaFileUtil {
                     utils.put(SupportedIlluminaFormat.Bcl, parameterizedFileUtil);
                     break;
                 case Locs:
-                    parameterizedFileUtil = new PerTileFileUtil(".locs", intensityLaneDir, new LocsFileFaker(), lane);
+                    parameterizedFileUtil = new PerTileOrPerRunFileUtil(".locs", intensityLaneDir, new LocsFileFaker(), lane);
                     utils.put(SupportedIlluminaFormat.Locs, parameterizedFileUtil);
                     break;
                 case Clocs:
@@ -168,20 +159,20 @@ public class IlluminaFileUtil {
     public List<Integer> getExpectedTiles() {
         IOUtil.assertFileIsReadable(tileMetricsOut);
         //Used just to ensure predictable ordering
-        final TreeSet<Integer> expectedTiles = new TreeSet<Integer>();
+        final TreeSet<Integer> expectedTiles = new TreeSet<>();
 
-        final Iterator<TileMetricsOutReader.IlluminaTileMetrics> tileMetrics = new TileMetricsOutReader(tileMetricsOut);
+        final Iterator<TileMetricsOutReader.IlluminaTileMetrics> tileMetrics = new TileMetricsOutReader(tileMetricsOut, TileMetricsOutReader.TileMetricsVersion.TWO);
         while (tileMetrics.hasNext()) {
             final TileMetricsOutReader.IlluminaTileMetrics tileMetric = tileMetrics.next();
 
-            if (tileMetric.getLaneNumber() == lane && 
+            if (tileMetric.getLaneNumber() == lane &&
                     !expectedTiles.contains(tileMetric.getTileNumber())) {
                 expectedTiles.add(tileMetric.getTileNumber());
             }
         }
 
         CloserUtil.close(tileMetrics);
-        return new ArrayList<Integer>(expectedTiles);
+        return new ArrayList<>(expectedTiles);
     }
 
     /**
@@ -198,16 +189,25 @@ public class IlluminaFileUtil {
                     "0 Formats were specified.  You need to specify at least SupportedIlluminaFormat to use getTiles");
         }
 
-        final List<Integer> tiles = getUtil(formats.get(0)).getTiles();
-        for (int i = 1; i < formats.size(); i++) {
-            final List<Integer> fmTiles = getUtil(formats.get(i)).getTiles();
-            if (tiles.size() != fmTiles.size() || !tiles.containsAll(fmTiles)) {
+        final List<ParameterizedFileUtil> tileBasedFormats = formats
+                .stream()
+                .map(this::getUtil)
+                .filter(ParameterizedFileUtil::checkTileCount).collect(Collectors.toList());
+
+        if( tileBasedFormats.size() > 0) {
+            final List<Integer> expectedTiles = tileBasedFormats.get(0).getTiles();
+
+            tileBasedFormats.forEach(util ->   {
+            if (expectedTiles.size() != util.getTiles().size() || !expectedTiles.containsAll(util.getTiles())) {
                 throw new PicardException(
                         "Formats do not have the same number of tiles! " + summarizeTileCounts(formats));
-            }
-        }
+            }});
 
-        return tiles;
+            return expectedTiles;
+        } else {
+            //we have no tile based file formats so we have no tiles.
+            return new ArrayList<>();
+        }
     }
 
     public File tileMetricsOut() {
@@ -221,11 +221,11 @@ public class IlluminaFileUtil {
      * @return A long string representation of the name
      */
     public static String longLaneStr(final int lane) {
-        String lstr = String.valueOf(lane);
+        final StringBuilder lstr = new StringBuilder(String.valueOf(lane));
         final int zerosToAdd = 3 - lstr.length();
 
         for (int i = 0; i < zerosToAdd; i++) {
-            lstr = "0" + lstr;
+            lstr.insert(0, "0");
         }
         return "L" + lstr;
     }
@@ -236,27 +236,46 @@ public class IlluminaFileUtil {
             return "";
         }
 
-        String summary = String.valueOf(intList.get(0));
+        final StringBuilder summary = new StringBuilder(String.valueOf(intList.get(0)));
         for (int i = 1; i < intList.size(); i++) {
-            summary += ", " + String.valueOf(intList.get(i));
+            summary.append(", ").append(String.valueOf(intList.get(i)));
         }
 
-        return summary;
+        return summary.toString();
     }
 
     private String summarizeTileCounts(final List<SupportedIlluminaFormat> formats) {
-        String summary;
+        final StringBuilder summary;
         ParameterizedFileUtil pfu = getUtil(formats.get(0));
         List<Integer> tiles = pfu.getTiles();
-        summary = pfu.extension + "(" + liToStr(tiles) + ")";
+        summary = new StringBuilder(pfu.extension + "(" + liToStr(tiles) + ")");
 
         for (final SupportedIlluminaFormat format : formats) {
             pfu = getUtil(format);
             tiles = pfu.getTiles();
 
-            summary += ", " + pfu.extension + "(" + liToStr(tiles) + ")";
+            summary.append(", ").append(pfu.extension).append("(").append(liToStr(tiles)).append(")");
         }
 
-        return summary;
+        return summary.toString();
+    }
+
+    public static boolean hasCbcls(final File basecallDir, final int lane) {
+        final File laneDir = new File(basecallDir, IlluminaFileUtil.longLaneStr(lane));
+        final File[] cycleDirs = IOUtil.getFilesMatchingRegexp(laneDir, IlluminaFileUtil.CYCLE_SUBDIRECTORY_PATTERN);
+
+        // Either the lane or the cycle directory do not exist!
+        if (cycleDirs == null) {
+            return false;
+        }
+
+        //CBCLs
+        final List<File> cbcls = new ArrayList<>();
+        Arrays.asList(cycleDirs)
+                .forEach(cycleDir -> cbcls.addAll(
+                        Arrays.asList(IOUtil.getFilesMatchingRegexp(
+                                cycleDir, "^" + IlluminaFileUtil.longLaneStr(lane) + "_(\\d{1,5}).cbcl$"))));
+
+        return cbcls.size() > 0;
     }
 }

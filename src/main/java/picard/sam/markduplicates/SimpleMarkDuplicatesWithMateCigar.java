@@ -33,9 +33,11 @@ import htsjdk.samtools.SAMRecord;
 import htsjdk.samtools.SAMRecordDuplicateComparator;
 import htsjdk.samtools.SAMTag;
 import htsjdk.samtools.util.*;
+import org.broadinstitute.barclay.argparser.ExperimentalFeature;
+import org.broadinstitute.barclay.help.DocumentedFeature;
 import picard.PicardException;
-import picard.cmdline.CommandLineProgramProperties;
-import picard.cmdline.programgroups.Testing;
+import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
+import picard.cmdline.programgroups.ReadDataManipulationProgramGroup;
 import picard.sam.DuplicationMetrics;
 import picard.sam.markduplicates.util.AbstractMarkDuplicatesCommandLineProgram;
 import picard.sam.markduplicates.util.LibraryIdGenerator;
@@ -61,11 +63,13 @@ import java.util.Set;
  *
  * @author nhomer
  */
+@DocumentedFeature
+@ExperimentalFeature
 @CommandLineProgramProperties(
-        usage = "Examines aligned records in the supplied SAM or BAM file to locate duplicate molecules. " +
+        summary = "Examines aligned records in the supplied SAM or BAM file to locate duplicate molecules. " +
                 "All records are then written to the output file with the duplicate records flagged.",
-        usageShort = "Examines aligned records in the supplied SAM or BAM file to locate duplicate molecules.",
-        programGroup = Testing.class
+        oneLineSummary = "Examines aligned records in the supplied SAM or BAM file to locate duplicate molecules.",
+        programGroup = ReadDataManipulationProgramGroup.class
 )
 public class SimpleMarkDuplicatesWithMateCigar extends MarkDuplicates {
     private final Log log = Log.getInstance(MarkDuplicatesWithMateCigar.class);
@@ -94,7 +98,7 @@ public class SimpleMarkDuplicatesWithMateCigar extends MarkDuplicates {
         IOUtil.assertFileIsWritable(METRICS_FILE);
 
         // Open the inputs
-        final SamHeaderAndIterator headerAndIterator = openInputs();
+        final SamHeaderAndIterator headerAndIterator = openInputs(true);
         final SAMFileHeader header = headerAndIterator.header;
 
         // Create the output header

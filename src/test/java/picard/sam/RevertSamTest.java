@@ -23,18 +23,14 @@
  */
 package picard.sam;
 
-import htsjdk.samtools.SAMFileHeader;
-import htsjdk.samtools.SAMReadGroupRecord;
-import htsjdk.samtools.SAMRecord;
-import htsjdk.samtools.SAMTag;
-import htsjdk.samtools.SamReader;
-import htsjdk.samtools.SamReaderFactory;
-import htsjdk.samtools.ValidationStringency;
+import htsjdk.samtools.*;
 import htsjdk.samtools.util.CloserUtil;
+import org.broadinstitute.barclay.argparser.CommandLineException;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 import picard.PicardException;
+import picard.cmdline.CommandLineProgram;
 import picard.cmdline.CommandLineProgramTest;
 
 import java.io.File;
@@ -131,7 +127,7 @@ public class RevertSamTest extends CommandLineProgramTest {
             verifyPositiveResults(output, reverter, removeDuplicates, removeAlignmentInfo, restoreOriginalQualities, outputByReadGroup, null, 8, sample, library);
         }
     }
-    
+
     @Test
     public void testOutputByReadGroupWithOutputMap() throws Exception {
         final File outputDir = Files.createTempDirectory("tmpPicardTest").toFile();
@@ -142,13 +138,16 @@ public class RevertSamTest extends CommandLineProgramTest {
         final String outputPath0 = outputDir + "/my_rg0.sam";
         final String outputPath1 = outputDir + "/rg1.cram";
         final String outputPath2 = outputDir + "/my_rg2.bam";
+        final String outputPath3 = outputDir + "/my_rg3.sam";
         mapWriter.println("READ_GROUP_ID\tOUTPUT");
         mapWriter.println("0\t" + outputPath0);
         mapWriter.println("2\t" + outputPath2);
         mapWriter.println("1\t" + outputPath1);
+        mapWriter.println("3\t" + outputPath3);
         System.out.println("outputFile: " + outputPath0);
         System.out.println("outputFile: " + outputPath1);
         System.out.println("outputFile: " + outputPath2);
+        System.out.println("outputFile: " + outputPath3);
         mapWriter.close();
         outputMapFile.deleteOnExit();
 
@@ -190,6 +189,14 @@ public class RevertSamTest extends CommandLineProgramTest {
         validator.MODE = ValidateSamFile.Mode.VERBOSE;
         final int result = validator.doWork();
         Assert.assertEquals(result, 0, "Validation of reverted single-end sample failed.");
+    }
+
+    @Test
+    public void testSingleEndSanitize() throws Exception {
+        final File output = File.createTempFile("single_end_reverted", ".sam");
+        output.deleteOnExit();
+        final String args[] = { "INPUT=" + singleEndSamToRevert, "OUTPUT=" + output.getAbsolutePath(), "SANITIZE=true"};
+        Assert.assertEquals(runPicardCommandLine(args), 0, "Sanitation of single-end sample failed.");
     }
 
     private void verifyPositiveResults(
@@ -274,7 +281,6 @@ public class RevertSamTest extends CommandLineProgramTest {
 
         final File output = File.createTempFile("bad", ".sam");
         output.deleteOnExit();
-        final RevertSam reverter = new RevertSam();
         final String args[] = new String[2 + (sample != null ? 1 : 0) + (library != null ? 1 : 0)];
         int index = 0;
         args[index++] = "INPUT=" + sampleLibraryOverrideSam;
@@ -303,13 +309,44 @@ public class RevertSamTest extends CommandLineProgramTest {
         final File outputDir = Files.createTempDirectory("picardRevertSamTest").toFile();
         outputDir.deleteOnExit();
 
-        final RevertSam reverter = new RevertSam();
         final String args[] = new String[4];
         int index = 0;
         args[index++] = "INPUT=" + basicSamToRevert;
         args[index++] = "OUTPUT_BY_READGROUP=true";
         args[index++] = "OUTPUT=" + outputDir;
         args[index++] = "OUTPUT_MAP=" + validOutputMap;
+
+        try {
+            final int returnCode = runPicardCommandLine(args);
+            Assert.assertEquals(returnCode, 1);
+        } catch (CommandLineException e) {
+            // Barclay parser throws on mutex violation
+            Assert.assertFalse(CommandLineProgram.useLegacyParser(getClass()));
+        }
+    }
+
+    @Test
+    public void testNoInput() throws Exception {
+        final File outputDir = Files.createTempDirectory("picardRevertSamTest").toFile();
+        outputDir.deleteOnExit();
+
+        final String args[] = new String[0];
+        try {
+            final int returnCode = runPicardCommandLine(args);
+            Assert.assertEquals(returnCode, 1);
+        } catch (CommandLineException e) {
+            // Barclay parser throws on command line errors
+            Assert.assertFalse(CommandLineProgram.useLegacyParser(getClass()));
+        }
+    }
+
+    @Test
+    public void testCommandLineHelp() throws Exception {
+        final File outputDir = Files.createTempDirectory("picardRevertSamTest").toFile();
+        outputDir.deleteOnExit();
+
+        final String args[] = new String[1];
+        args[0] = "--help";
         final int returnCode = runPicardCommandLine(args);
         Assert.assertEquals(returnCode, 1);
     }
@@ -437,12 +474,68 @@ public class RevertSamTest extends CommandLineProgramTest {
         Assert.assertEquals(outputMap.get("rg1"), new File("/path/to/my_rg_1.ubam"));
         Assert.assertEquals(outputMap.get("rg2"), new File("/path/to/my_rg_2.ubam"));
     }
-    
+
     @Test
     public void testGetDefaultExtension() {
         Assert.assertEquals(RevertSam.getDefaultExtension("this.is.a.sam"), ".sam");
         Assert.assertEquals(RevertSam.getDefaultExtension("this.is.a.cram"), ".cram");
         Assert.assertEquals(RevertSam.getDefaultExtension("this.is.a.bam"), ".bam");
         Assert.assertEquals(RevertSam.getDefaultExtension("foo"), ".bam");
+    }
+
+    @Test(expectedExceptions = PicardException.class)
+    public void testNoRgInfoOutputByRg() {
+        final String [] args = new String[]{
+                "I=testdata/picard/sam/bam2fastq/paired/bad/missing-rg-info.sam",
+                "OUTPUT_BY_READGROUP=true",
+                "O=."
+        };
+        runPicardCommandLine(args);
+    }
+
+    @Test
+    public void testNoRgInfoSanitize() throws Exception {
+        final File output = File.createTempFile("no-rg-reverted", ".sam");
+        output.deleteOnExit();
+        final String [] args = new String[]{
+                "I=testdata/picard/sam/bam2fastq/paired/bad/missing-rg-info.sam",
+                "SANITIZE=true",
+                "O=" + output.getAbsolutePath()
+        };
+        Assert.assertEquals(runPicardCommandLine(args), 0);
+        verifyPositiveResults(output, new RevertSam(), true, true, false, false, null, 240, null, null);
+    }
+
+    @Test
+    public void testSanitizeAndDeduplicateRecords() throws Exception {
+        final File input  = File.createTempFile("test-input-santize-and-deduplicate-records", ".sam");
+        final File output = File.createTempFile("test-output-santize-and-deduplicate-records", ".sam");
+
+        // Create a SAM file that has duplicate records
+        final SamReader reader     = SamReaderFactory.makeDefault().open(Paths.get(basicSamToRevert));
+        final SAMFileWriter writer = new SAMFileWriterFactory().makeSAMOrBAMWriter(reader.getFileHeader(), false, input);
+        int numDuplicated = 0;
+        for (final SAMRecord rec : reader) {
+            writer.addAlignment(rec);
+            if (!rec.getReadPairedFlag() || rec.getFirstOfPairFlag()) {
+                writer.addAlignment(rec);
+                numDuplicated++;
+            }
+        }
+        reader.close();
+        writer.close();
+
+        // Make sure some records are duplicated
+        Assert.assertTrue(numDuplicated > 0);
+
+        final String [] args = new String[]{
+                "I=" + input.getAbsolutePath(),
+                "SANITIZE=true",
+                "KEEP_FIRST_DUPLICATE=true",
+                "MAX_DISCARD_FRACTION=1",
+                "O=" + output.getAbsolutePath()
+        };
+        Assert.assertEquals(runPicardCommandLine(args), 0);
+        verifyPositiveResults(output, new RevertSam(), true, true, false, false, null, 8, null, null);
     }
 }

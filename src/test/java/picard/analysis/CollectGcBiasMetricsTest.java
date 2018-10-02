@@ -38,6 +38,8 @@ import org.testng.annotations.BeforeTest;
 import org.testng.annotations.Test;
 import picard.cmdline.CommandLineProgramTest;
 import picard.sam.SortSam;
+import picard.vcf.VcfTestUtils;
+
 import static picard.analysis.GcBiasMetricsCollector.PerUnitGcBiasMetricsCollector.*;
 
 import java.io.File;
@@ -89,19 +91,15 @@ public class CollectGcBiasMetricsTest extends CommandLineProgramTest {
 
     @BeforeTest
     void setupBuilder() throws IOException {
-        tempSamFileChrM_O = File.createTempFile("CollectGcBias", ".bam", TEST_DIR);
-        tempSamFileAllChr = File.createTempFile("CollectGcBias", ".bam", TEST_DIR);
-        tempSamFileChrM_O.deleteOnExit();
-        tempSamFileAllChr.deleteOnExit();
+        tempSamFileChrM_O = VcfTestUtils.createTemporaryIndexedFile("CollectGcBias", ".bam");
+        tempSamFileAllChr = VcfTestUtils.createTemporaryIndexedFile("CollectGcBias", ".bam");
 
-        final File tempSamFileUnsorted = File.createTempFile("CollectGcBias", ".bam", TEST_DIR);
-        tempSamFileUnsorted.deleteOnExit();
-
+        final File tempSamFileUnsorted = VcfTestUtils.createTemporaryIndexedFile("CollectGcBias", ".bam");
 
         final SAMFileHeader header = new SAMFileHeader();
 
         try {
-            header.setSequenceDictionary(SAMSequenceDictionaryExtractor.extractDictionary(dict));
+            header.setSequenceDictionary(SAMSequenceDictionaryExtractor.extractDictionary(dict.toPath()));
             header.setSortOrder(SAMFileHeader.SortOrder.unsorted);
         } catch (final SAMException e) {
             e.printStackTrace();
@@ -115,12 +113,12 @@ public class CollectGcBiasMetricsTest extends CommandLineProgramTest {
         //build one last readgroup for comparing that window count stays the same whether you use all contigs or not
         setupTest2(1, readGroupId1, readGroupRecord1, sample1, library1, header, setBuilder4);
 
-        final List<SAMRecordSetBuilder> test1Builders = new ArrayList<SAMRecordSetBuilder>();
+        final List<SAMRecordSetBuilder> test1Builders = new ArrayList<>();
         test1Builders.add(setBuilder1);
         test1Builders.add(setBuilder2);
         test1Builders.add(setBuilder3);
 
-        final List<SAMRecordSetBuilder> test2Builders = new ArrayList<SAMRecordSetBuilder>();
+        final List<SAMRecordSetBuilder> test2Builders = new ArrayList<>();
         test2Builders.add(setBuilder4);
 
         tempSamFileChrM_O = build(test1Builders, tempSamFileUnsorted, header);
@@ -144,7 +142,7 @@ public class CollectGcBiasMetricsTest extends CommandLineProgramTest {
 
         runGcBias(tempSamFileChrM_O, REFERENCE_FILE_1, outfile, detailsOutfile, false);
 
-        final MetricsFile<GcBiasSummaryMetrics, Comparable<?>> output = new MetricsFile<GcBiasSummaryMetrics, Comparable<?>>();
+        final MetricsFile<GcBiasSummaryMetrics, Comparable<?>> output = new MetricsFile<>();
         output.read(new FileReader(outfile));
 
         for (final GcBiasSummaryMetrics metrics : output.getMetrics()) {
@@ -234,11 +232,11 @@ public class CollectGcBiasMetricsTest extends CommandLineProgramTest {
         runGcBias(tempSamFileChrM_O, REFERENCE_FILE_1, outfile, detailsOutfile, false);
         runGcBias(tempSamFileAllChr, REFERENCE_FILE_1, allChrOutFile, allChrDetailsOutfile, false);
 
-        final MetricsFile<GcBiasDetailMetrics, Comparable<?>> outputDetails = new MetricsFile<GcBiasDetailMetrics, Comparable<?>>();
+        final MetricsFile<GcBiasDetailMetrics, Comparable<?>> outputDetails = new MetricsFile<>();
         outputDetails.read(new FileReader(detailsOutfile));
         final List<GcBiasDetailMetrics> details = outputDetails.getMetrics();
 
-        final MetricsFile<GcBiasDetailMetrics, Comparable<?>> outputAllChrDetails = new MetricsFile<GcBiasDetailMetrics, Comparable<?>>();
+        final MetricsFile<GcBiasDetailMetrics, Comparable<?>> outputAllChrDetails = new MetricsFile<>();
         outputAllChrDetails.read(new FileReader(allChrDetailsOutfile));
 
         int i = 0;
@@ -248,8 +246,9 @@ public class CollectGcBiasMetricsTest extends CommandLineProgramTest {
             if (metrics.ACCUMULATION_LEVEL.equals(ACCUMULATION_LEVEL_ALL_READS)) {
                 Assert.assertEquals(metrics.WINDOWS, details.get(i).WINDOWS);
                 i++;
+            } else {
+                break;
             }
-            else {break;}
         }
     }
 
@@ -259,8 +258,7 @@ public class CollectGcBiasMetricsTest extends CommandLineProgramTest {
     // or library or sample, so there are separate ones for each type when testing multi-level collection.
     /////////////////////////////////////////////////////////////////////////////
     public File build (final List<SAMRecordSetBuilder> setBuilder, final File unsortedSam, final SAMFileHeader header) throws IOException {
-        final File sortedSam = File.createTempFile("CollectGcBias", ".bam", TEST_DIR);
-        sortedSam.deleteOnExit();
+        final File sortedSam = VcfTestUtils.createTemporaryIndexedFile("CollectGcBias", ".bam");
 
         final SAMFileWriter writer = new SAMFileWriterFactory()
                 .setCreateIndex(true).makeBAMWriter(header, false, unsortedSam);

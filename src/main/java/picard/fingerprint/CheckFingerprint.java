@@ -36,81 +36,175 @@ import htsjdk.samtools.util.SequenceUtil;
 import htsjdk.variant.utils.SAMSequenceDictionaryExtractor;
 import htsjdk.variant.vcf.VCFFileReader;
 import htsjdk.variant.vcf.VCFHeader;
+import org.broadinstitute.barclay.argparser.Argument;
+import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
+import org.broadinstitute.barclay.help.DocumentedFeature;
 import picard.PicardException;
 import picard.analysis.FingerprintingDetailMetrics;
 import picard.analysis.FingerprintingSummaryMetrics;
 import picard.cmdline.CommandLineProgram;
-import picard.cmdline.CommandLineProgramProperties;
-import picard.cmdline.Option;
 import picard.cmdline.StandardOptionDefinitions;
-import picard.cmdline.programgroups.Fingerprinting;
+import picard.cmdline.programgroups.DiagnosticsAndQCProgramGroup;
 
 import java.io.File;
+import java.io.IOException;
+import java.nio.file.Path;
 import java.util.Collections;
 import java.util.List;
 
 /**
- * Attempts to check the sample identity of the sequence/genotype data in the provided file (SAM/BAM or VCF)
- * against a set of known genotypes in the supplied genotype file (in either GELI or VCF format).
+ * Checks the sample identity of the sequence/genotype data in the provided file (SAM/BAM or VCF)
+ * against a set of known genotypes in the supplied genotype file (in VCF format).
+ * <p>
+ * <h3> Summary </h3>
+ * Computes a fingerprint (essentially, genotype information from different parts of the genome)
+ * from the supplied input file (SAM/BAM or VCF) file and
+ * compares it to the expected fingerprint genotypes provided. The key output is a LOD score
+ * which represents the relative likelihood of the sequence data originating from the same
+ * sample as the genotypes vs. from a random sample.
+ * <br/>
+ * Two outputs are produced:
+ * <ol>
+ * <li>A summary metrics file that gives metrics of the fingerprint matches when comparing the input to a set of
+ * genotypes for the expected sample.  At the single sample level (if the input was a VCF) or at the read
+ * level (lane or index within a lane) (if the input was a SAM/BAM) </li>
+ * <li>A detail metrics file that contains an individual SNP/Haplotype comparison within a fingerprint comparison.
+ * </li>
+ * </ol>
+ * The metrics files fill the fields of the classes {@link FingerprintingSummaryMetrics} and
+ * {@link FingerprintingDetailMetrics}.
+ * The output files may be specified individually using the SUMMARY_OUTPUT and DETAIL_OUTPUT options.
+ * Alternatively the OUTPUT option may be used instead to give the base of the two output
+ * files, with the summary metrics having a file extension {@value #FINGERPRINT_SUMMARY_FILE_SUFFIX},
+ * and the detail metrics having a file extension {@value #FINGERPRINT_DETAIL_FILE_SUFFIX}.
+ * <br/>
+ * <h3>Example comparing a bam against known genotypes:</h3>
+ * <pre>
+ *     java -jar picard.jar CheckFingerprint \
+ *          INPUT=sample.bam \
+ *          GENOTYPES=sample_genotypes.vcf \
+ *          HAPLOTYPE_DATABASE=fingerprinting_haplotype_database.txt \
+ *          OUTPUT=sample_fingerprinting
+ * </pre>
+ * <br/>
+ * <h3>Detailed Explanation</h3>
+ * <p>
+ * This tool calculates a single number that reports the LOD score for identity check between the {@link #INPUT}
+ * and the {@link #GENOTYPES}. A positive value indicates that the data seems to have come from the same individual
+ * or, in other words the identity checks out. The scale is logarithmic (base 10), so a LOD of 6 indicates
+ * that it is 1,000,000 more likely that the data matches the genotypes than not. A negative value indicates
+ * that the data do not match. A score that is near zero is inconclusive and can result from low coverage
+ * or non-informative genotypes.
+ * <p>
+ * The identity check makes use of haplotype blocks defined in the {@link #HAPLOTYPE_MAP} file to enable it to have higher
+ * statistical power for detecting identity or swap by aggregating data from several SNPs in the haplotype block. This
+ * enables an identity check of samples with very low coverage (e.g. ~1x mean coverage).
+ * <p>
+ * When provided a VCF, the identity check looks at the PL, GL and GT fields (in that order) and uses the first one that
+ * it finds.
  *
  * @author Tim Fennell
  */
+
 @CommandLineProgramProperties(
-        usage = CheckFingerprint.USAGE_DETAILS,
-        usageShort = "Computes a fingerprint from the supplied input (SAM/BAM or VCF) file and compares it to the provided genotypes",
-        programGroup = Fingerprinting.class
+        summary = CheckFingerprint.USAGE_DETAILS,
+        oneLineSummary = "Computes a fingerprint from the supplied input (SAM/BAM or VCF) file and compares it to the provided genotypes",
+        programGroup = DiagnosticsAndQCProgramGroup.class
 )
+@DocumentedFeature
 public class CheckFingerprint extends CommandLineProgram {
 
-    static final String USAGE_DETAILS = "Computes a fingerprint from the supplied input file (SAM/BAM or VCF) file and " +
-            "compares it to the expected fingerprint genotypes provided. The key output is a LOD score " +
-            "which represents the relative likelihood of the sequence data originating from the same " +
-            "sample as the genotypes vs. from a random sample.  Two outputs are produced: (1) a summary " +
-            "metrics file that gives metrics at the single sample level (if the input was a VCF) or at the read " +
-            "level (lane or index within a lane) (if the input was a SAM/BAM) " +
-            "versus a set of known genotypes for the expected sample, and (2) a detail metrics file that " +
-            "contains an individual SNP/Haplotype comparison within a fingerprint comparison.  The two " +
-            "files may be specified individually using the SUMMARY_OUTPUT and DETAIL_OUTPUT options.  " +
-            "Alternatively the OUTPUT option may be used instead to give the base of the two output " +
-            "files, with the summary metrics having a file extension '" + CheckFingerprint.FINGERPRINT_SUMMARY_FILE_SUFFIX + "' " +
-            "and the detail metrics having a file extension '" + CheckFingerprint.FINGERPRINT_DETAIL_FILE_SUFFIX + "'.";
+    static final String USAGE_DETAILS =
+            "Checks the sample identity of the sequence/genotype data in the provided file (SAM/BAM or VCF) " +
+                    "against a set of known genotypes in the supplied genotype file (in VCF format).\n " +
+                    "\n " +
+                    "<h3>Summary</h3> " +
+                    "Computes a fingerprint (essentially, genotype information from different parts of the genome) " +
+                    "from the supplied input file (SAM/BAM or VCF) file and " +
+                    "compares it to the expected fingerprint genotypes provided. " +
+                    "The key output is a LOD score which represents the relative likelihood of " +
+                    "the sequence data originating from the same sample as the genotypes vs. from a random sample. " +
+                    "<br/> " +
+                    "Two outputs are produced: " +
+                    "<ol> " +
+                    "<li>" +
+                    "A summary metrics file that gives metrics of the fingerprint matches when comparing the input to a set of " +
+                    "genotypes for the expected sample.  " +
+                    "At the single sample level (if the input was a VCF) or at the read level (lane or index within a lane) " +
+                    "(if the input was a SAM/BAM) " +
+                    "</li> " +
+                    "<li>" +
+                    "A detail metrics file that contains an individual SNP/Haplotype comparison within a fingerprint comparison." +
+                    "</li> " +
+                    "</ol> " +
+                    "The metrics files fill the fields of the classes FingerprintingSummaryMetrics and FingerprintingDetailMetrics. " +
+                    "The output files may be specified individually using the SUMMARY_OUTPUT and DETAIL_OUTPUT options. " +
+                    "Alternatively the OUTPUT option may be used instead to give the base of the two output files, " +
+                    "with the summary metrics having a file extension \".fingerprinting_summary_metrics\", " +
+                    "and the detail metrics having a file extension \".fingerprinting_detail_metrics\". " +
+                    "<br/> " +
+                    "<h3>Example comparing a bam against known genotypes:</h3> " +
+                    "<pre> " +
+                    "    java -jar picard.jar CheckFingerprint \\\n " +
+                    "         INPUT=sample.bam \\\n " +
+                    "         GENOTYPES=sample_genotypes.vcf \\\n " +
+                    "         HAPLOTYPE_DATABASE=fingerprinting_haplotype_database.txt \\\n " +
+                    "         OUTPUT=sample_fingerprinting " +
+                    "</pre> " +
+                    "<br/> " +
+                    "<h3>Detailed Explanation</h3>" +
+                    "This tool calculates a single number that reports the LOD score for identity check between the INPUT and the GENOTYPES. " +
+                    "A positive value indicates that the data seems to have come from the same individual or, " +
+                    "in other words the identity checks out. " +
+                    "The scale is logarithmic (base 10), " +
+                    "so a LOD of 6 indicates that it is 1,000,000 more likely that the data matches the genotypes than not. " +
+                    "A negative value indicates that the data do not match. " +
+                    "A score that is near zero is inconclusive and can result from low coverage or non-informative genotypes. " +
+                    "\n\n " +
+                    "The identity check makes use of haplotype blocks defined in the HAPLOTYPE_MAP file to enable it to have higher " +
+                    "statistical power for detecting identity or swap by aggregating data from several SNPs in the haplotype block. " +
+                    "This enables an identity check of samples with very low coverage (e.g. ~1x mean coverage). " +
+                    "\n\n " +
+                    "When provided a VCF, the identity check looks at the PL, GL and GT fields (in that order) " +
+                    "and uses the first one that it finds. ";
 
-    @Option(shortName=StandardOptionDefinitions.INPUT_SHORT_NAME, doc = "Input file SAM/BAM or VCF.  If a VCF is used, " +
+    @Argument(shortName = StandardOptionDefinitions.INPUT_SHORT_NAME, doc = "Input file SAM/BAM or VCF.  If a VCF is used, " +
             "it must have at least one sample.  If there are more than one samples in the VCF, the parameter OBSERVED_SAMPLE_ALIAS must " +
             "be provided in order to indicate which sample's data to use.  If there are no samples in the VCF, an exception will be thrown.")
-    public File INPUT;
+    public String INPUT;
 
-    @Option(optional = true, doc = "If the input is a VCF, this parameters used to select which sample's data in the VCF to use.")
+    @Argument(optional = true, doc = "If the input is a VCF, this parameters used to select which sample's data in the VCF to use.")
     public String OBSERVED_SAMPLE_ALIAS;
 
-    @Option(shortName=StandardOptionDefinitions.OUTPUT_SHORT_NAME, doc = "The base prefix of output files to write.  The summary metrics " +
+    @Argument(shortName = StandardOptionDefinitions.OUTPUT_SHORT_NAME, doc = "The base prefix of output files to write.  The summary metrics " +
             "will have the file extension '" + CheckFingerprint.FINGERPRINT_SUMMARY_FILE_SUFFIX + "' and the detail metrics will have " +
-            "the extension '" + CheckFingerprint.FINGERPRINT_DETAIL_FILE_SUFFIX + "'.",  mutex = {"SUMMARY_OUTPUT", "DETAIL_OUTPUT"})
+            "the extension '" + CheckFingerprint.FINGERPRINT_DETAIL_FILE_SUFFIX + "'.", mutex = {"SUMMARY_OUTPUT", "DETAIL_OUTPUT"})
     public String OUTPUT;
 
-    @Option(shortName = "S", doc = "The text file to which to write summary metrics.", mutex = {"OUTPUT"})
+    @Argument(shortName = "S", doc = "The text file to which to write summary metrics.", mutex = {"OUTPUT"})
     public File SUMMARY_OUTPUT;
 
-    @Option(shortName = "D", doc = "The text file to which to write detail metrics.",  mutex = {"OUTPUT"})
+    @Argument(shortName = "D", doc = "The text file to which to write detail metrics.", mutex = {"OUTPUT"})
     public File DETAIL_OUTPUT;
 
-    @Option(shortName="G", doc = "File of genotypes (VCF or GELI) to be used in comparison. May contain " +
+    @Argument(shortName = "G", doc = "File of genotypes (VCF) to be used in comparison. May contain " +
             "any number of genotypes; CheckFingerprint will use only those that are usable for fingerprinting.")
-    public File GENOTYPES;
+    public String GENOTYPES;
 
-    @Option(shortName = "SAMPLE_ALIAS", optional=true, doc = "This parameter can be used to specify which sample's genotypes to use from the " +
+    @Argument(shortName = "SAMPLE_ALIAS", optional = true, doc = "This parameter can be used to specify which sample's genotypes to use from the " +
             "expected VCF file (the GENOTYPES file).  If it is not supplied, the sample name from the input " +
             "(VCF or BAM read group header) will be used.")
     public String EXPECTED_SAMPLE_ALIAS;
 
-    @Option(shortName="H", doc = "A file of haplotype information produced by the CheckFingerprint program.")
+    @Argument(shortName = "H", doc = "The file lists a set of SNPs, optionally arranged in high-LD blocks, to be used for fingerprinting. See " +
+            "https://software.broadinstitute.org/gatk/documentation/article?id=9526 for details.")
     public File HAPLOTYPE_MAP;
 
-    @Option(shortName="LOD", doc = "When counting haplotypes checked and matching, count only haplotypes " +
+    @Argument(shortName = "LOD", doc = "When counting haplotypes checked and matching, count only haplotypes " +
             "where the most likely haplotype achieves at least this LOD.")
     public double GENOTYPE_LOD_THRESHOLD = 5;
 
-    @Option(optional=true, shortName="IGNORE_RG", doc = "If the input is a SAM/BAM, and this parameter is true, treat the " +
+    @Argument(optional = true, shortName = "IGNORE_RG", doc = "If the input is a SAM/BAM, and this parameter is true, treat the " +
             "entire input BAM as one single read group in the calculation, " +
             "ignoring RG annotations, and producing a single fingerprint metric for the entire BAM.")
     public boolean IGNORE_READ_GROUPS = false;
@@ -120,11 +214,8 @@ public class CheckFingerprint extends CommandLineProgram {
     public static final String FINGERPRINT_SUMMARY_FILE_SUFFIX = "fingerprinting_summary_metrics";
     public static final String FINGERPRINT_DETAIL_FILE_SUFFIX = "fingerprinting_detail_metrics";
 
-
-    // Stock main method
-    public static void main(final String[] args) {
-        new CheckFingerprint().instanceMainWithExit(args);
-    }
+    private Path inputPath;
+    private Path genotypesPath;
 
     @Override
     protected int doWork() {
@@ -132,16 +223,21 @@ public class CheckFingerprint extends CommandLineProgram {
         if (OUTPUT == null) {
             outputDetailMetricsFile = DETAIL_OUTPUT;
             outputSummaryMetricsFile = SUMMARY_OUTPUT;
-        }
-        else {
+        } else {
             if (!OUTPUT.endsWith(".")) OUTPUT = OUTPUT + ".";
             outputDetailMetricsFile = new File(OUTPUT + FINGERPRINT_DETAIL_FILE_SUFFIX);
             outputSummaryMetricsFile = new File(OUTPUT + FINGERPRINT_SUMMARY_FILE_SUFFIX);
         }
 
-        IOUtil.assertFileIsReadable(INPUT);
+        try {
+            inputPath = IOUtil.getPath(INPUT);
+            genotypesPath = IOUtil.getPath(GENOTYPES);
+        } catch (IOException e) {
+            throw new IllegalArgumentException(e);
+        }
+        IOUtil.assertFileIsReadable(inputPath);
         IOUtil.assertFileIsReadable(HAPLOTYPE_MAP);
-        IOUtil.assertFileIsReadable(GENOTYPES);
+        IOUtil.assertFileIsReadable(genotypesPath);
         IOUtil.assertFileIsWritable(outputDetailMetricsFile);
         IOUtil.assertFileIsWritable(outputSummaryMetricsFile);
 
@@ -149,19 +245,18 @@ public class CheckFingerprint extends CommandLineProgram {
         List<FingerprintResults> results;
 
         String observedSampleAlias = null;
-        final boolean isBamOrSamFile = isBamOrSamFile(INPUT);
+        final boolean isBamOrSamFile = isBamOrSam(inputPath);
         if (isBamOrSamFile) {
-            SequenceUtil.assertSequenceDictionariesEqual(SAMSequenceDictionaryExtractor.extractDictionary(INPUT), SAMSequenceDictionaryExtractor.extractDictionary(GENOTYPES), true);
-            SequenceUtil.assertSequenceDictionariesEqual(SAMSequenceDictionaryExtractor.extractDictionary(INPUT), checker.getHeader().getSequenceDictionary(), true);
+            SequenceUtil.assertSequenceDictionariesEqual(SAMSequenceDictionaryExtractor.extractDictionary(inputPath), SAMSequenceDictionaryExtractor.extractDictionary(genotypesPath), true);
+            SequenceUtil.assertSequenceDictionariesEqual(SAMSequenceDictionaryExtractor.extractDictionary(inputPath), checker.getHeader().getSequenceDictionary(), true);
 
             // Verify that there's only one sample in the SAM/BAM.
-            final SamReader in = SamReaderFactory.makeDefault().referenceSequence(REFERENCE_SEQUENCE).open(INPUT);
+            final SamReader in = SamReaderFactory.makeDefault().referenceSequence(REFERENCE_SEQUENCE).open(inputPath);
             for (final SAMReadGroupRecord rec : in.getFileHeader().getReadGroups()) {
                 if (observedSampleAlias == null) {
                     observedSampleAlias = rec.getSample();
-                }
-                else if (!observedSampleAlias.equals(rec.getSample())) {
-                    throw new PicardException("INPUT SAM/BAM file must not contain data from multiple samples.");
+                } else if (!observedSampleAlias.equals(rec.getSample())) {
+                    throw new PicardException("inputPath SAM/BAM file must not contain data from multiple samples.");
                 }
             }
             CloserUtil.close(in);
@@ -172,28 +267,28 @@ public class CheckFingerprint extends CommandLineProgram {
             }
 
             results = checker.checkFingerprints(
-                    Collections.singletonList(INPUT),
-                    Collections.singletonList(GENOTYPES),
+                    Collections.singletonList(inputPath),
+                    Collections.singletonList(genotypesPath),
                     EXPECTED_SAMPLE_ALIAS,
                     IGNORE_READ_GROUPS);
         } else {            // Input is a VCF
             // Note that FingerprintChecker.loadFingerprints() verifies that the VCF's Sequence Dictionaries agree with that of the Haplotye Map File
 
             // Verify that there is only one sample in the VCF
-            final VCFFileReader fileReader = new VCFFileReader(INPUT, false);
+            final VCFFileReader fileReader = new VCFFileReader(inputPath, false);
             final VCFHeader fileHeader = fileReader.getFileHeader();
             if (fileHeader.getNGenotypeSamples() < 1) {
-                throw new PicardException("INPUT VCF file must contain at least one sample.");
+                throw new PicardException("inputPath VCF file must contain at least one sample.");
             }
             if ((fileHeader.getNGenotypeSamples() > 1) && (OBSERVED_SAMPLE_ALIAS == null)) {
-                throw new PicardException("INPUT VCF file contains multiple samples and yet the OBSERVED_SAMPLE_ALIAS parameter is not set.");
+                throw new PicardException("inputPath VCF file contains multiple samples and yet the OBSERVED_SAMPLE_ALIAS parameter is not set.");
             }
             // set observedSampleAlias to the parameter, if set.  Otherwise, if here, this must be a single sample VCF, get it's sample
             observedSampleAlias = (OBSERVED_SAMPLE_ALIAS != null) ? OBSERVED_SAMPLE_ALIAS : fileHeader.getGenotypeSamples().get(0);
 
             // Now verify that observedSampleAlias is, in fact, in the VCF
             if (!fileHeader.getGenotypeSamples().contains(observedSampleAlias)) {
-                throw new PicardException("INPUT VCF file does not contain OBSERVED_SAMPLE_ALIAS: " + observedSampleAlias);
+                throw new PicardException("inputPath VCF file does not contain OBSERVED_SAMPLE_ALIAS: " + observedSampleAlias);
             }
 
             if (OBSERVED_SAMPLE_ALIAS == null) {
@@ -206,24 +301,24 @@ public class CheckFingerprint extends CommandLineProgram {
                 EXPECTED_SAMPLE_ALIAS = observedSampleAlias;
             }
 
-            results = checker.checkFingerprints(
-                    Collections.singletonList(INPUT),
-                    Collections.singletonList(GENOTYPES),
+            results = checker.checkFingerprintsFromPaths(
+                    Collections.singletonList(inputPath),
+                    Collections.singletonList(genotypesPath),
                     observedSampleAlias,
                     EXPECTED_SAMPLE_ALIAS);
         }
 
-        final MetricsFile<FingerprintingSummaryMetrics,?> summaryFile = getMetricsFile();
-        final MetricsFile<FingerprintingDetailMetrics,?> detailsFile = getMetricsFile();
+        final MetricsFile<FingerprintingSummaryMetrics, ?> summaryFile = getMetricsFile();
+        final MetricsFile<FingerprintingDetailMetrics, ?> detailsFile = getMetricsFile();
 
         for (final FingerprintResults fpr : results) {
             final MatchResults mr = fpr.getMatchResults().first();
 
             final FingerprintingSummaryMetrics metrics = new FingerprintingSummaryMetrics();
-            metrics.READ_GROUP                = fpr.getReadGroup();
-            metrics.SAMPLE                    = EXPECTED_SAMPLE_ALIAS;
-            metrics.LL_EXPECTED_SAMPLE        = mr.getSampleLikelihood();
-            metrics.LL_RANDOM_SAMPLE          = mr.getPopulationLikelihood();
+            metrics.READ_GROUP = fpr.getReadGroup();
+            metrics.SAMPLE = EXPECTED_SAMPLE_ALIAS;
+            metrics.LL_EXPECTED_SAMPLE = mr.getSampleLikelihood();
+            metrics.LL_RANDOM_SAMPLE = mr.getPopulationLikelihood();
             metrics.LOD_EXPECTED_SAMPLE = mr.getLOD();
 
             for (final LocusResult lr : mr.getLocusResults()) {
@@ -254,17 +349,17 @@ public class CheckFingerprint extends CommandLineProgram {
 
                 // Build the detail metrics
                 final FingerprintingDetailMetrics details = new FingerprintingDetailMetrics();
-                details.READ_GROUP         = fpr.getReadGroup();
-                details.SAMPLE             = EXPECTED_SAMPLE_ALIAS;
-                details.SNP                = lr.getSnp().getName();
-                details.SNP_ALLELES        = lr.getSnp().getAlleleString();
-                details.CHROM              = lr.getSnp().getChrom();
-                details.POSITION           = lr.getSnp().getPos();
-                details.EXPECTED_GENOTYPE  = expectedGenotype.toString();
-                details.OBSERVED_GENOTYPE  = observedGenotype.toString();
-                details.LOD                = lr.getLodGenotype();
-                details.OBS_A              = lr.getAllele1Count();
-                details.OBS_B              = lr.getAllele2Count();
+                details.READ_GROUP = fpr.getReadGroup();
+                details.SAMPLE = EXPECTED_SAMPLE_ALIAS;
+                details.SNP = lr.getSnp().getName();
+                details.SNP_ALLELES = lr.getSnp().getAlleleString();
+                details.CHROM = lr.getSnp().getChrom();
+                details.POSITION = lr.getSnp().getPos();
+                details.EXPECTED_GENOTYPE = expectedGenotype.toString();
+                details.OBSERVED_GENOTYPE = observedGenotype.toString();
+                details.LOD = lr.getLodGenotype();
+                details.OBS_A = lr.getAllele1Count();
+                details.OBS_B = lr.getAllele2Count();
                 detailsFile.addMetric(details);
             }
 
@@ -279,19 +374,26 @@ public class CheckFingerprint extends CommandLineProgram {
     }
 
     protected String[] customCommandLineValidation() {
-        IOUtil.assertFileIsReadable(INPUT);
 
-        boolean isBamOrSamFile = isBamOrSamFile(INPUT);
-        if (!isBamOrSamFile && IGNORE_READ_GROUPS) {
-            return new String[]{"The parameter IGNORE_READ_GROUPS can only be used with BAM/SAM inputs."};
-        }
-        if (isBamOrSamFile && OBSERVED_SAMPLE_ALIAS != null) {
-            return new String[]{"The parameter OBSERVED_SAMPLE_ALIAS can only be used with a VCF input."};
+        try {
+            final boolean isBamOrSamFile = isBamOrSam(IOUtil.getPath(INPUT));
+            if (!isBamOrSamFile && IGNORE_READ_GROUPS) {
+                return new String[]{"The parameter IGNORE_READ_GROUPS can only be used with BAM/SAM inputs."};
+            }
+            if (isBamOrSamFile && OBSERVED_SAMPLE_ALIAS != null) {
+                return new String[]{"The parameter OBSERVED_SAMPLE_ALIAS can only be used with a VCF input."};
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
         }
         return super.customCommandLineValidation();
     }
 
-    private boolean isBamOrSamFile(final File f) {
-        return (BamFileIoUtils.isBamFile(f) || f.getName().endsWith(IOUtil.SAM_FILE_EXTENSION));
+    static boolean isBamOrSam(final File f) {
+        return isBamOrSam(f.toPath());
+    }
+
+    static boolean isBamOrSam(final Path p) {
+        return (p.toUri().getRawPath().endsWith(BamFileIoUtils.BAM_FILE_EXTENSION) || p.toUri().getRawPath().endsWith(IOUtil.SAM_FILE_EXTENSION));
     }
 }

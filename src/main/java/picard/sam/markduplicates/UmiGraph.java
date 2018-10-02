@@ -26,7 +26,10 @@ package picard.sam.markduplicates;
 
 import htsjdk.samtools.DuplicateSet;
 import htsjdk.samtools.SAMRecord;
+import htsjdk.samtools.util.StringUtil;
+import org.apache.commons.lang3.StringUtils;
 import picard.PicardException;
+import picard.util.GraphUtils;
 
 import java.util.*;
 import java.util.stream.Collectors;
@@ -65,8 +68,8 @@ public class UmiGraph {
 
         // First ensure that all the reads have a UMI, if any reads are missing a UMI throw an exception unless allowMissingUmis is true
         for (SAMRecord rec : records) {
-            if(rec.getStringAttribute(umiTag) == null) {
-                if(allowMissingUmis) {
+            if (UmiUtil.getSanitizedUMI(rec, umiTag) == null) {
+                if (allowMissingUmis) {
                     rec.setAttribute(umiTag, "");
                 } else {
                     throw new PicardException("Read " + rec.getReadName() + " does not contain a UMI with the " + umiTag + " attribute.");
@@ -75,12 +78,11 @@ public class UmiGraph {
         }
 
         // Count the number of times each UMI occurs
-        umiCounts = records.stream().collect(Collectors.groupingBy(p -> p.getStringAttribute(umiTag), counting()));
+        umiCounts = records.stream().collect(Collectors.groupingBy(p -> UmiUtil.getSanitizedUMI(p, umiTag), counting()));
 
         // At first we consider every UMI as if it were its own duplicate set
         numUmis = umiCounts.size();
         umi = new String[numUmis];
-
         duplicateSetID = IntStream.rangeClosed(0, numUmis-1).toArray();
 
         int i = 0;
@@ -90,45 +92,27 @@ public class UmiGraph {
         }
     }
 
-    // Part of Union-Find with Path Compression to determine the duplicate set a particular UMI belongs to.
-    private int findRepresentativeUmi(int umiID) {
-        int representativeUmi = umiID; // All UMIs of a duplicate set will have the same reprsentativeUmi.
-        while (representativeUmi != duplicateSetID[representativeUmi]) {
-            representativeUmi = duplicateSetID[representativeUmi];
-        }
-        while (umiID != representativeUmi) {
-            int newUmiID = duplicateSetID[umiID];
-            duplicateSetID[umiID] = representativeUmi;
-            umiID = newUmiID;
-        }
-        return representativeUmi;
-    }
-
-    // Part of Union-Find with Path Compression that joins to UMIs to be part of the same duplicate set.
-    private void joinUmisIntoDuplicateSet(final int umi1ID, final int umi2ID) {
-        int representativeUmi1 = findRepresentativeUmi(umi1ID);
-        int representativeUmi2 = findRepresentativeUmi(umi2ID);
-        if (representativeUmi1 == representativeUmi2) return;
-        duplicateSetID[representativeUmi1] = representativeUmi2;
-    }
-
     List<DuplicateSet> joinUmisIntoDuplicateSets(final int maxEditDistanceToJoin) {
         // Compare all UMIs to each other.  If they are within maxEditDistanceToJoin
         // join them to the same duplicate set using the union-find algorithm.
+
+        GraphUtils.Graph<Integer> umiGraph = new GraphUtils.Graph<>();
         for (int i = 0; i < numUmis; i++) {
+            umiGraph.addNode(i);
             for (int j = i + 1; j < numUmis; j++) {
-                if (isWithinEditDistance(umi[i], umi[j], maxEditDistanceToJoin)) {
-                    joinUmisIntoDuplicateSet(i, j);
+                if (StringUtil.isWithinHammingDistance(umi[i], umi[j], maxEditDistanceToJoin)) {
+                    umiGraph.addEdge(i, j);
                 }
             }
         }
 
+        final Map<Integer, Integer> umiClusterMap = umiGraph.cluster();
         // This ensures that all duplicate sets have unique IDs.  During Union-Find a tree is constructed
         // where each UMI points to parent UMI.  This ensures that all UMIs that belong to the same duplicate
         // set point to the same parent UMI.  Note that the parent UMI is only used as a representative UMI and
         // is not at all related to the assigned UMI.
         for (int i = 0; i < numUmis; i++) {
-            duplicateSetID[i] = findRepresentativeUmi(i);
+            duplicateSetID[i] = umiClusterMap.get(i);
         }
 
         final Map<Integer, List<SAMRecord>> duplicateSets = new HashMap<>();
@@ -136,13 +120,12 @@ public class UmiGraph {
         // Assign UMIs to duplicateSets
         final Map<String, Integer> duplicateSetsFromUmis = getDuplicateSetsFromUmis();
         for (SAMRecord rec : records) {
-            final String umi = rec.getStringAttribute(umiTag);
+            final String umi = UmiUtil.getSanitizedUMI(rec, umiTag);
             final Integer duplicateSetIndex = duplicateSetsFromUmis.get(umi);
 
             if (duplicateSets.containsKey(duplicateSetIndex)) {
                 duplicateSets.get(duplicateSetIndex).add(rec);
-            }
-            else {
+            } else {
                 final List<SAMRecord> n = new ArrayList<>();
                 n.add(rec);
                 duplicateSets.put(duplicateSetIndex, n);
@@ -155,26 +138,44 @@ public class UmiGraph {
             final List<SAMRecord> recordList = entry.getValue();
 
             // Add records to the DuplicateSet
-            for (final SAMRecord rec : recordList) {
-                ds.add(rec);
-            }
+            recordList.forEach(ds::add);
 
             // For a particular duplicate set, identify the most common UMI
             // and use this as an assigned UMI.
             long maxCount = 0;
             String assignedUmi = null;
-            for (SAMRecord rec : recordList) {
-                final String umi = rec.getStringAttribute(umiTag);
+            String fewestNUmi = null;
+            long nCount = 0;
 
-                if (umiCounts.get(umi) > maxCount) {
-                   maxCount = umiCounts.get(umi);
-                   assignedUmi = umi;
+            for (SAMRecord rec : recordList) {
+                final String umi = UmiUtil.getSanitizedUMI(rec, umiTag);
+
+                // If there is another choice, we don't want to choose the UMI with a N
+                // as the assignedUmi
+                if (umi.contains("N")) {
+
+                    int count = StringUtils.countMatches(umi, "N");
+                    // If an UMI containing a N hasn't been seen before, the current UMI is now the fewestNUmi
+                    if (nCount == 0) {
+                        nCount = count;
+                        fewestNUmi = umi;
+                    } else if (count < nCount) { // If N containing UMI already exists, reset it if we find a lower one
+                        nCount = count;
+                        fewestNUmi = umi;
+                    }
+                } else if (umiCounts.get(umi) > maxCount) {
+                    maxCount = umiCounts.get(umi);
+                    assignedUmi = umi;
                 }
             }
 
+            // If we didn't find a Umi w/o a N to represent
+            // then choose the one with the fewest Ns
+            if (assignedUmi == null) { assignedUmi = fewestNUmi; }
+
             // Set the records to contain the assigned UMI
             for (final SAMRecord rec : recordList) {
-                if (allowMissingUmis && rec.getStringAttribute(umiTag) == "") {
+                if (allowMissingUmis && rec.getStringAttribute(umiTag).isEmpty()) {
                     // The SAM spec doesn't support empty tags, so we set it to null if it is empty.
                     rec.setAttribute(umiTag, null);
                 } else {
@@ -186,25 +187,6 @@ public class UmiGraph {
         }
 
         return duplicateSetList;
-    }
-
-    // Determine if the two strings s1 and s2 are within edit distance of editDistance.
-    // TODO: use HTSJDK version when this become available
-    private boolean isWithinEditDistance(final String s1, final String s2, final int editDistance) {
-        // Comparing edit distance of strings with different lengths is not supported
-        if (s1.length() != s2.length()) {
-            throw new PicardException("Attempting to determine if two UMIs of different length were within a specified edit distance.");
-        }
-        int measuredDistance = 0;
-        for (int i = 0;i < s1.length();i++) {
-            if (s1.charAt(i) != s2.charAt(i)) {
-                measuredDistance++;
-                if (measuredDistance > editDistance) {
-                    return false;
-                }
-            }
-        }
-        return true;
     }
 
     // Create a map that maps a umi to the duplicateSetID

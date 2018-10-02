@@ -32,44 +32,77 @@ import htsjdk.variant.variantcontext.writer.VariantContextWriter;
 import htsjdk.variant.variantcontext.writer.VariantContextWriterBuilder;
 import htsjdk.variant.vcf.VCFFileReader;
 import htsjdk.variant.vcf.VCFHeader;
+import org.broadinstitute.barclay.argparser.Argument;
+import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
+import org.broadinstitute.barclay.help.DocumentedFeature;
 import picard.cmdline.CommandLineProgram;
-import picard.cmdline.CommandLineProgramProperties;
-import picard.cmdline.Option;
 import picard.cmdline.StandardOptionDefinitions;
-import picard.cmdline.programgroups.VcfOrBcf;
+import picard.cmdline.programgroups.VariantManipulationProgramGroup;
 
 import java.io.File;
 import java.util.EnumSet;
 
+/**
+ * Renames a sample within a VCF or BCF.
+ *
+ * <h3> Summary </h3>
+ * This tool enables the user to rename a sample in either a VCF or BCF file. It is intended to change the name of a
+ * sample in a VCF prior to merging with VCF files in which one or more samples have similar names. Note that the
+ * input VCF file must be single-sample VCF and that the NEW_SAMPLE_NAME argument is required.
+ *
+ *
+ * <h3> Inputs</h3>
+ * <ul>
+ *     <li> Input single-sample VCF or BCF file. </li>
+ *     <li> Output single-sample VCF or BCF file. </li>
+ *     <li> New name to give sample in output VCF. </li>
+ *     <li> [Optional] Existing name of sample in VCF; if provided, asserts that that is the name of the extant sample name. </li>
+ * </ul>
+ *
+ * <h3>Usage example:</h3>
+ * <pre>
+ *     java -jar picard.jar RenameSampleInVcf \
+ *     INPUT=input_variants.vcf \
+ *     OUTPUT=output_variants.vcf \
+ *     NEW_SAMPLE_NAME=sample
+ * </pre>
+ *
+ * <h3> Notes </h3>
+ * The input VCF (or BCF) <i>must</i> be single-sample.
+ *
+ */
+
 @CommandLineProgramProperties(
-        usage = RenameSampleInVcf.USAGE_SUMMARY + RenameSampleInVcf.USAGE_DETAILS,
-        usageShort = RenameSampleInVcf.USAGE_SUMMARY,
-        programGroup = VcfOrBcf.class
-)
+        summary = RenameSampleInVcf.USAGE_DETAILS,
+        oneLineSummary = RenameSampleInVcf.USAGE_SUMMARY,
+        programGroup = VariantManipulationProgramGroup.class)
+@DocumentedFeature
 public class RenameSampleInVcf extends CommandLineProgram {
-    static final String USAGE_SUMMARY = "Renames a sample within a VCF or BCF.  ";
+    static final String USAGE_SUMMARY = "Renames a sample within a VCF or BCF.";
     static final String USAGE_DETAILS = "This tool enables the user to rename a sample in either a VCF or BCF file.  " +
             "It is intended to change the name of a sample in a VCF prior to merging with VCF files in which one or more samples have " +
             "similar names. Note that the input VCF file must be single-sample VCF and that the NEW_SAMPLE_NAME is required." +
-            "<br />" +
+            "<br /><br />" +
             "<h4>Usage example:</h4>" +
             "<pre>" +
             "java -jar picard.jar RenameSampleInVcf \\<br />" +
-            "      I=input.vcf \\<br />" +
-            "      O=renamed.vcf \\<br />" +
-            "      NEW_SAMPLE_NAME=sample123" +
+            "      INPUT=input_variants.vcf \\<br />" +
+            "      OUTPUT=output_variants.vcf \\<br />" +
+            "      NEW_SAMPLE_NAME=sample" +
             "</pre>" +
-            "<hr />";
-    @Option(shortName=StandardOptionDefinitions.INPUT_SHORT_NAME, doc="Input single sample VCF.")
+            "<h4> Notes </h4>" +
+            "<br />" +
+            "The input VCF (or BCF) <i>must</i> be single-sample.";
+    @Argument(shortName=StandardOptionDefinitions.INPUT_SHORT_NAME, doc="Input single sample VCF or BCF file.")
     public File INPUT;
 
-    @Option(shortName=StandardOptionDefinitions.OUTPUT_SHORT_NAME, doc="Output single sample VCF.")
+    @Argument(shortName=StandardOptionDefinitions.OUTPUT_SHORT_NAME, doc="Output single sample VCF.")
     public File OUTPUT;
 
-    @Option(doc="Existing name of sample in VCF; if provided, asserts that that is the name of the extant sample name", optional = true)
+    @Argument(doc="Existing name of sample in VCF; if provided, asserts that that is the name of the extant sample name", optional = true)
     public String OLD_SAMPLE_NAME = null;
 
-    @Option(doc="New name to give sample in output VCF.")
+    @Argument(doc="New name to give sample in output VCF.")
     public String NEW_SAMPLE_NAME;
 
 

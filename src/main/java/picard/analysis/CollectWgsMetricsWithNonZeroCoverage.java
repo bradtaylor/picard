@@ -27,11 +27,17 @@ package picard.analysis;
 import htsjdk.samtools.SAMReadGroupRecord;
 import htsjdk.samtools.SamReader;
 import htsjdk.samtools.metrics.MetricsFile;
-import htsjdk.samtools.util.*;
+import htsjdk.samtools.util.Histogram;
+import htsjdk.samtools.util.IOUtil;
+import htsjdk.samtools.util.IntervalList;
+import htsjdk.samtools.util.Log;
+import htsjdk.samtools.util.StringUtil;
+import org.broadinstitute.barclay.argparser.ExperimentalFeature;
+import org.broadinstitute.barclay.help.DocumentedFeature;
 import picard.PicardException;
-import picard.cmdline.CommandLineProgramProperties;
-import picard.cmdline.Option;
-import picard.cmdline.programgroups.Alpha;
+import org.broadinstitute.barclay.argparser.Argument;
+import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
+import picard.cmdline.programgroups.DiagnosticsAndQCProgramGroup;
 import picard.filter.CountingFilter;
 import picard.filter.CountingPairedFilter;
 import picard.util.RExecutor;
@@ -39,10 +45,12 @@ import picard.util.RExecutor;
 import java.io.File;
 import java.util.List;
 
+@DocumentedFeature
+@ExperimentalFeature
 @CommandLineProgramProperties(
-        usage = CollectWgsMetricsWithNonZeroCoverage.USAGE_SUMMARY + CollectWgsMetricsWithNonZeroCoverage.USAGE_DETAILS,
-        usageShort = CollectWgsMetricsWithNonZeroCoverage.USAGE_SUMMARY,
-        programGroup = Alpha.class
+        summary = CollectWgsMetricsWithNonZeroCoverage.USAGE_SUMMARY + CollectWgsMetricsWithNonZeroCoverage.USAGE_DETAILS,
+        oneLineSummary = CollectWgsMetricsWithNonZeroCoverage.USAGE_SUMMARY,
+        programGroup = DiagnosticsAndQCProgramGroup.class
 )
 public class CollectWgsMetricsWithNonZeroCoverage extends CollectWgsMetrics {
 
@@ -65,7 +73,7 @@ public class CollectWgsMetricsWithNonZeroCoverage extends CollectWgsMetrics {
             "WgsMetricsWithNonZeroCoverage</a> documentation for detailed explanations of the output metrics." +
             "<hr />";
 
-    @Option(shortName = "CHART", doc = "A file (with .pdf extension) to write the chart to.")
+    @Argument(shortName = "CHART", doc = "A file (with .pdf extension) to write the chart to.")
     public File CHART_OUTPUT;
 
     private final Log log = Log.getInstance(CollectWgsMetricsWithNonZeroCoverage.class);
@@ -125,7 +133,7 @@ public class CollectWgsMetricsWithNonZeroCoverage extends CollectWgsMetrics {
         // Initialize the SamReader, so the header is available prior to super.doWork, for getIntervalsToExamine call. */
         getSamReader();
 
-        this.collector = new WgsMetricsWithNonZeroCoverageCollector(COVERAGE_CAP, getIntervalsToExamine());
+        this.collector = new WgsMetricsWithNonZeroCoverageCollector(this, COVERAGE_CAP, getIntervalsToExamine());
         super.doWork();
 
         final List<SAMReadGroupRecord> readGroups = getSamFileHeader().getReadGroups();
@@ -187,8 +195,9 @@ public class CollectWgsMetricsWithNonZeroCoverage extends CollectWgsMetrics {
         Histogram<Integer> highQualityDepthHistogram;
         Histogram<Integer> highQualityDepthHistogramNonZero;
 
-        public WgsMetricsWithNonZeroCoverageCollector(final int coverageCap, final IntervalList intervals) {
-            super(coverageCap, intervals);
+        public WgsMetricsWithNonZeroCoverageCollector(final CollectWgsMetricsWithNonZeroCoverage metrics,
+                final int coverageCap, final IntervalList intervals) {
+            super(metrics, coverageCap, intervals);
         }
 
         @Override
@@ -239,5 +248,4 @@ public class CollectWgsMetricsWithNonZeroCoverage extends CollectWgsMetrics {
             return (highQualityDepthHistogram.isEmpty() || highQualityDepthHistogramNonZero.isEmpty());
         }
     }
-
 }

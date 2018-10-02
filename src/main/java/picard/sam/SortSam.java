@@ -33,64 +33,124 @@ import htsjdk.samtools.util.CloserUtil;
 import htsjdk.samtools.util.IOUtil;
 import htsjdk.samtools.util.Log;
 import htsjdk.samtools.util.ProgressLogger;
+import org.broadinstitute.barclay.argparser.CommandLineParser;
+import org.broadinstitute.barclay.help.DocumentedFeature;
 import picard.cmdline.CommandLineProgram;
-import picard.cmdline.CommandLineProgramProperties;
-import picard.cmdline.Option;
+import org.broadinstitute.barclay.argparser.Argument;
+import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
 import picard.cmdline.StandardOptionDefinitions;
-import picard.cmdline.programgroups.SamOrBam;
+import picard.cmdline.programgroups.ReadDataManipulationProgramGroup;
 
 import java.io.File;
 
+
 /**
+ * Sorts a SAM or BAM file.
+ *
+ * <h3> Summary </h3>
+ * This tool sorts the input SAM or BAM file by coordinate, queryname (QNAME), or some other property of the SAM
+ * record. The SortOrder of a SAM/BAM file is found in the SAM file header tag labeled SO.
+ * <p> For a coordinate sorted SAM/BAM file, read alignments are sorted first by the reference sequence name (RNAME)
+ * field using the reference sequence dictionary tag labeled SQ.
+ * Alignments within these subgroups are secondarily sorted using the left-most mapping position of the read (POS).
+ * Subsequent to this sorting scheme, alignments are listed arbitrarily.</p> For queryname-sorted alignments, all
+ * alignments are grouped using the queryname field but the alignments are not necessarily sorted within these groups.
+ * Reads having the same queryname are derived from the same template.
+ *
+ * <h3> Inputs</h3>
+ * <ul>
+ *     <li> Input BAM or SAM file to sort </li>
+ *     <li> Sorted BAM or SAM output file </li>
+ *     <li> Sort order of output file </li>
+ * </ul>
+ *
+ * <h3>Usage example:</h3>
+ * <pre>
+ *     java -jar picard.jar SortSam \
+ *     INPUT=input.bam \
+ *     OUTPUT=sorted.bam \
+ *     SORT_ORDER=coordinate
+ * </pre>
+ *
+ *
  * @author alecw@broadinstitute.org
  */
 @CommandLineProgramProperties(
-        usage = SortSam.USAGE_SUMMARY + SortSam.USAGE_DETAILS,
-        usageShort = SortSam.USAGE_SUMMARY,
-        programGroup = SamOrBam.class
-)
+        summary = SortSam.USAGE_DETAILS,
+        oneLineSummary = SortSam.USAGE_SUMMARY,
+        programGroup = ReadDataManipulationProgramGroup.class)
+@DocumentedFeature
 public class SortSam extends CommandLineProgram {
-    static final String USAGE_SUMMARY = "Sorts a SAM or BAM file.  ";
+    static final String USAGE_SUMMARY = "Sorts a SAM or BAM file";
     static final String USAGE_DETAILS = "This tool sorts the input SAM or BAM file by coordinate, queryname (QNAME), or some other property " +
             "of the SAM record. The SortOrder of a SAM/BAM file is found in the SAM file header tag @HD in the field labeled SO.  " +
-            "" +
-            "<p>For a coordinate sorted SAM/BAM file, read alignments are sorted first by the reference sequence name (RNAME) field using the " +
+            "<p> For a coordinate sorted SAM/BAM file, read alignments are sorted first by the reference sequence name (RNAME) field using the " +
             "reference sequence dictionary (@SQ tag).  Alignments within these subgroups are secondarily sorted using the left-most mapping " +
             "position of the read (POS).  Subsequent to this sorting scheme, alignments are listed arbitrarily.</p>" +
-            "" +
-            "For queryname-sorted alignments, all alignments are grouped using the queryname field but the alignments are not necessarily sorted within these groups.  " +
-            "Reads having the same queryname are derived from the same template.  " +
-
+            "<p>For queryname-sorted alignments, all alignments are grouped using the queryname field but the alignments are not necessarily sorted within these groups.  " +
+            "Reads having the same queryname are derived from the same template.</p>" +
+            "<hr /><hr />" +
             "<h4>Usage example:</h4>" +
             "<pre>" +
             "java -jar picard.jar SortSam \\<br />" +
             "      I=input.bam \\<br />" +
             "      O=sorted.bam \\<br />" +
             "      SORT_ORDER=coordinate" +
-            "</pre>" +
-
-            "<hr />";
-    @Option(doc = "The BAM or SAM file to sort.", shortName = StandardOptionDefinitions.INPUT_SHORT_NAME)
+            "</pre>";
+    @Argument(doc = "Input BAM or SAM file to sort.", shortName = StandardOptionDefinitions.INPUT_SHORT_NAME)
     public File INPUT;
 
-    @Option(doc = "The sorted BAM or SAM output file. ", shortName = StandardOptionDefinitions.OUTPUT_SHORT_NAME)
+    @Argument(doc = "Sorted BAM or SAM output file.", shortName = StandardOptionDefinitions.OUTPUT_SHORT_NAME)
     public File OUTPUT;
 
-    @Option(shortName = StandardOptionDefinitions.SORT_ORDER_SHORT_NAME, doc = "Sort order of output file")
-    public SAMFileHeader.SortOrder SORT_ORDER;
+    // note that SortOrder here is a local enum, not the SamFileHeader version.
+    @Argument(shortName = StandardOptionDefinitions.SORT_ORDER_SHORT_NAME, doc = "Sort order of output file. ")
+    public SortOrder SORT_ORDER;
+
 
     private final Log log = Log.getInstance(SortSam.class);
 
-    public static void main(final String[] argv) {
-        new SortSam().instanceMainWithExit(argv);
+    /** a SortOrder class intended to expose the various options available as inputs to SortSam
+     *
+     * In particular this enables to add a description and also to not expose "unsorted" and "unknown"
+     * as they are not appropriate values to sort a file into.
+     *
+     */
+    private enum SortOrder implements CommandLineParser.ClpEnum {
+        queryname("Sorts according to the readname. This will place read-pairs and other derived reads (secondary and " +
+                "supplementary) adjacent to each other. Note that the readnames are compared lexicographically, even though " +
+                "they may include numbers. In paired reads, Read1 sorts before Read2."),
+        coordinate("Sorts primarily according to the SEQ and POS fields of the record. The sequence will sorted according to " +
+                "the order in the sequence dictionary, taken from from the header of the file. Within each reference sequence, the " +
+                "reads are sorted by the position. Unmapped reads whose mates are mapped will be placed near their mates. " +
+                "Unmapped read-pairs are placed after all the mapped reads and their mates."),
+        duplicate("Sorts the reads so that duplicates reads are adjacent. Required that the mate-cigar (MC) tag is present. " +
+                "The resulting will be sorted by library, unclipped 5-prime position, orientation, and mate's unclipped " +
+                "5-prime position.")
+        ;
+
+        private String description;
+        SortOrder(String description) {
+            this.description=description;
+        }
+
+        public SAMFileHeader.SortOrder getSortOrder(){
+            return SAMFileHeader.SortOrder.valueOf(this.name());
+        }
+
+        @Override
+        public String getHelpDoc() {
+            return description;
+        }
     }
+
 
     protected int doWork() {
         IOUtil.assertFileIsReadable(INPUT);
         IOUtil.assertFileIsWritable(OUTPUT);
         final SamReader reader = SamReaderFactory.makeDefault().referenceSequence(REFERENCE_SEQUENCE).open(INPUT);
         ;
-        reader.getFileHeader().setSortOrder(SORT_ORDER);
+        reader.getFileHeader().setSortOrder(SORT_ORDER.getSortOrder());
         final SAMFileWriter writer = new SAMFileWriterFactory().makeSAMOrBAMWriter(reader.getFileHeader(), false, OUTPUT);
         writer.setProgressLogger(
                 new ProgressLogger(log, (int) 1e7, "Wrote", "records from a sorting collection"));
